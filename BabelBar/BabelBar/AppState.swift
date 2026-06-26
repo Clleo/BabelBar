@@ -263,6 +263,9 @@ final class AppState: ObservableObject {
 
         isTranslating = true
         errorMessage = nil
+        // Clear the destination field so a stale previous result doesn't linger
+        // under the loading spinner while the new translation is in flight.
+        if reverse { inputText = "" } else { outputText = "" }
         let accounts = self.accounts
         let startIndex = settings.activeSlot
         let instructions = settings.aiInstructions
