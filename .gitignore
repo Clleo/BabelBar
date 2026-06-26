@@ -1,0 +1,36 @@
+# Xcode
+DerivedData/
+build/
+.build_output/
+*-gaorlbbzfdocxmckayuyhepkwtyp/
+*-dnhsnjzyjofytrdohlmnibalouot/
+CompilationCache.noindex/
+ModuleCache.noindex/
+SDKStatCaches.noindex/
+SymbolCache.noindex/
+*.xcuserstate
+*.xcuserdata/
+xcuserdata/
+
+# Built app
+BabelBar.app/
+
+# macOS
+.DS_Store
+
+# Node / npm (MCP tools)
+node_modules/
+package-lock.json
+
+# Scratch / working assets
+image/
+outputs/
+
+# Release installers (kept on disk in the project root, not in git)
+*.dmg
+
+# CodeGraph index (local, do not commit)
+.codegraph/
+
+# Claude Code local config / worktrees
+.claude/
