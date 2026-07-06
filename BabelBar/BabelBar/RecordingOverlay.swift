@@ -1,20 +1,32 @@
 import AppKit
 import SwiftUI
 import AVFoundation
+import Network
 
 /// Live microphone level (0…1), published on the main thread, that drives the recording
 /// waveform. `AudioRecorder` pushes RMS-based values from the audio tap; the overlay
 /// observes it. Attack is fast / release is slower so the meter feels lively but smooth.
 final class MicLevel: ObservableObject {
     static let shared = MicLevel()
-    private init() {}
+    private init() { startNetworkMonitor() }
 
     @Published var level: CGFloat = 0
     /// True while we're waiting on a result (transcription/translation) — the overlay then
-    /// shows a loader in place of the red record dot.
+    /// shows a loader in place of the record dot.
     @Published var processing = false
-    /// User setting: show the red record dot. The loader is unaffected by this.
+    /// User setting: show the record dot. The loader is unaffected by this.
     @Published var showDot = true
+    /// True when there's no internet connection — the record dot turns red instead of green.
+    @Published var isOffline = false
+
+    private let networkMonitor = NWPathMonitor()
+
+    private func startNetworkMonitor() {
+        networkMonitor.pathUpdateHandler = { [weak self] path in
+            DispatchQueue.main.async { self?.isOffline = path.status != .satisfied }
+        }
+        networkMonitor.start(queue: DispatchQueue(label: "BabelBar.NWPathMonitor"))
+    }
 
     func push(_ raw: Float) {
         let v = CGFloat(min(1, max(0, raw)))
@@ -210,14 +222,21 @@ private struct WaveformOverlayView: View {
         }
     }
 
-    /// Record dot: a soft semi-transparent red halo with a crisp SOLID (flat) red core inside.
+    /// Record dot: a soft semi-transparent halo with a crisp SOLID (flat) core inside.
+    /// Green while online, red when there's no internet connection.
     private var recordDot: some View {
-        ZStack {
+        let haloColor = mic.isOffline
+            ? Color(red: 0.90, green: 0.18, blue: 0.33)   // red
+            : Color(red: 0.20, green: 0.85, blue: 0.45)   // green
+        let coreColor = mic.isOffline
+            ? Color(red: 0.96, green: 0.42, blue: 0.54)   // red
+            : Color(red: 0.48, green: 0.95, blue: 0.66)   // green
+        return ZStack {
             Circle()
-                .fill(Color(red: 0.90, green: 0.18, blue: 0.33).opacity(0.30))   // translucent halo
+                .fill(haloColor.opacity(0.30))   // translucent halo
                 .frame(width: 14, height: 14)
             Circle()
-                .fill(Color(red: 0.96, green: 0.42, blue: 0.54))                 // solid, crisp core
+                .fill(coreColor)                 // solid, crisp core
                 .frame(width: 8, height: 8)
         }
     }
