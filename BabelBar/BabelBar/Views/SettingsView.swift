@@ -56,6 +56,12 @@ struct SettingsView: View {
                 state.checkForUpdates()
             }
         }
+        // Settings window is a reused singleton (never rebuilt), so `onAppear` alone won't
+        // refire when it's just brought back to front. Re-read permissions whenever the app
+        // regains focus — the common flow is: grant a permission in System Settings, alt-tab back.
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            permRefresh &+= 1
+        }
     }
 
     // MARK: - GITHUB STAR CARD
@@ -372,6 +378,10 @@ struct SettingsView: View {
             row(state.t(.dictateToCursor),
                 help: state.t(.tipDictate)) {
                 ModifierComboRecorder(combo: $state.settings.dictateHotkey, recordingPrompt: state.t(.recordModifiers)) { state.saveSettings() }
+            }
+            row(state.t(.translateAtCursor),
+                help: state.t(.tipTranslateAtCursor)) {
+                ModifierComboRecorder(combo: $state.settings.translateDictateHotkey, recordingPrompt: state.t(.recordModifiers)) { state.saveSettings() }
             }
             row(state.t(.showRecordingDot), help: state.t(.tipShowRecordingDot)) {
                 CapsuleToggle(isOn: Binding(
@@ -703,9 +713,13 @@ struct SettingsView: View {
         return min(1, CGFloat(state.settings.tokensUsed) / CGFloat(state.settings.tokensLimit))
     }
 
-    private func formatted(_ n: Int) -> String {
+    private static let numberFormatter: NumberFormatter = {
         let f = NumberFormatter(); f.numberStyle = .decimal
-        return f.string(from: NSNumber(value: n)) ?? "\(n)"
+        return f
+    }()
+
+    private func formatted(_ n: Int) -> String {
+        Self.numberFormatter.string(from: NSNumber(value: n)) ?? "\(n)"
     }
 
     /// Uniform gap from a section title to its first content row, across every section.
@@ -784,14 +798,6 @@ struct SettingsView: View {
     private func applyHotKeys() {
         state.saveSettings()
         HotKeyManager.shared.reload()
-    }
-
-    private func hotkeyBadge(_ text: String) -> some View {
-        Text(text)
-            .font(.system(size: 12, weight: .medium))
-            .foregroundColor(Theme.textPrimary)
-            .padding(.horizontal, 12).padding(.vertical, 6)
-            .glassPanel(corner: 10)
     }
 
     /// Persisted Source/Target preference bindings (save immediately on change).

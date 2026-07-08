@@ -14,6 +14,9 @@ final class AudioRecorder {
 
     /// Begin capturing. Throws if the audio engine can't start.
     func start() throws {
+        // A second start (e.g. cursor dictation while the in-app mic is already recording)
+        // must not install a second tap on the same bus — that raises an NSException.
+        if isRecording { stop() }
         lock.lock(); samples.removeAll(); lock.unlock()
         MicLevel.shared.reset()
 

@@ -109,6 +109,7 @@ struct AppSettings: Codable {
 
     // Voice shortcuts (modifier-only, e.g. Fn / Shift+Fn).
     var dictateHotkey = ModifierCombo(fn: true)                 // dictate at cursor
+    var translateDictateHotkey = ModifierCombo(fn: true, shift: true)  // dictate → translate → insert at cursor
     var voiceInputEnabled = true    // master switch for the whole voice-input feature
     var voiceSoundEnabled = true
     var voiceSoundName = "Pop"
@@ -133,7 +134,7 @@ struct AppSettings: Codable {
         case provider2, baseURL2, model2, activeSlot, launchAtLogin
         case showMenuBarIcon, autoCheckUpdates, lastUpdateCheck
         case openHotKey, selectionHotKey, screenshotHotKey
-        case dictateHotkey, voiceInputEnabled, voiceSoundEnabled, voiceSoundName, voiceSoundVolume, showRecordingDot, duckAudio
+        case dictateHotkey, translateDictateHotkey, voiceInputEnabled, voiceSoundEnabled, voiceSoundName, voiceSoundVolume, showRecordingDot, duckAudio
         case speechEngine, whisperModel, insertMethod, whisperCleanup
         case transcriptionBaseURL, transcriptionModel
     }
@@ -165,6 +166,7 @@ struct AppSettings: Codable {
         selectionHotKey = (try? c.decode(KeyCombo.self, forKey: .selectionHotKey)) ?? AppSettings().selectionHotKey
         screenshotHotKey = (try? c.decode(KeyCombo.self, forKey: .screenshotHotKey)) ?? AppSettings().screenshotHotKey
         dictateHotkey = (try? c.decode(ModifierCombo.self, forKey: .dictateHotkey)) ?? AppSettings().dictateHotkey
+        translateDictateHotkey = (try? c.decode(ModifierCombo.self, forKey: .translateDictateHotkey)) ?? AppSettings().translateDictateHotkey
         voiceSoundEnabled = (try? c.decode(Bool.self, forKey: .voiceSoundEnabled)) ?? true
         voiceSoundName = (try? c.decode(String.self, forKey: .voiceSoundName)) ?? "Pop"
         voiceInputEnabled = (try? c.decode(Bool.self, forKey: .voiceInputEnabled)) ?? true

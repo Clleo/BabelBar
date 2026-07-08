@@ -5,7 +5,7 @@ import Carbon.HIToolbox
 // =============================================================================
 //  Global voice shortcuts (FreeFlow-style):
 //   • a modifier-only combo (default Fn) → dictate speech and type it at the cursor
-//   • another combo (default Shift+Fn)   → open BabelBar, dictate, auto-translate
+//   • another combo (default Shift+Fn)   → dictate, translate in background, type at the cursor
 //  Both support hold-to-talk (hold → speak → release) AND tap-to-toggle (tap → speak → tap).
 //  Implemented with a CGEventTap so the Fn key can be detected (keyCode 63) reliably.
 //  Requires Accessibility permission.
@@ -32,7 +32,10 @@ struct ModifierCombo: Codable, Equatable {
     }
 }
 
-enum VoiceAction { case dictateToCursor }
+enum VoiceAction {
+    case dictateToCursor          // Fn:       speak → type raw transcript at the cursor
+    case dictateTranslateToCursor // Shift+Fn: speak → translate in background → type at the cursor
+}
 
 /// Types a string at the current cursor position in the frontmost app (no clipboard).
 enum CursorTyping {

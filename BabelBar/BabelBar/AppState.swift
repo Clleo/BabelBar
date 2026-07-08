@@ -415,6 +415,70 @@ final class AppState: ObservableObject {
         }
     }
 
+    // MARK: - Global voice→translate→insert (Shift+Fn)
+
+    /// Start dictation for the "speak → translate → type at cursor" shortcut.
+    /// Identical capture to `startCursorDictation`; only the stop handler differs (it translates).
+    func startCursorTranslateDictation() {
+        dictationEngine.requestMic { [weak self] ok in
+            guard let self else { return }
+            guard ok else { self.errorMessage = self.t(.errMicSpeech); return }
+            do {
+                try self.dictationEngine.start(duckAudio: self.settings.duckAudio)
+                self.playTriggerSound()
+                MicLevel.shared.showDot = self.settings.showRecordingDot
+                RecordingOverlay.shared.show()
+            } catch { self.errorMessage = error.localizedDescription }
+        }
+    }
+
+    /// Stop recording, transcribe, translate to the configured language in the background,
+    /// then type the translation at the cursor. The overlay stays up (loader) until the
+    /// translation lands so the user sees it's still working.
+    func stopCursorTranslateDictation() {
+        RecordingOverlay.shared.setProcessing(true)
+        dictationEngine.finish(settings: settings, language: dictationLanguage()) { [weak self] result in
+            guard let self else { return }
+            switch result {
+            case .success(let text) where !text.isEmpty:
+                self.translateForCursor(text)        // keeps the overlay up until the result is typed
+            case .failure(let e):
+                RecordingOverlay.shared.hide()
+                self.errorMessage = e.localizedDescription
+            default:
+                RecordingOverlay.shared.hide()
+            }
+        }
+    }
+
+    /// Translate dictated text (direction resolved like the main field) and type it at the cursor.
+    private func translateForCursor(_ text: String) {
+        let (src, tgt) = resolveDirection(for: text)
+        let accounts = self.accounts
+        let startIndex = settings.activeSlot
+        let instructions = settings.aiInstructions
+        Task {
+            do {
+                let result = try await translator.translate(
+                    text: text, from: src, to: tgt, instructions: instructions,
+                    accounts: accounts, startIndex: startIndex
+                )
+                await MainActor.run {
+                    RecordingOverlay.shared.hide()
+                    if self.settings.activeSlot != result.usedSlot { self.settings.activeSlot = result.usedSlot }
+                    if result.totalTokens > 0 { self.settings.tokensUsed += result.totalTokens }
+                    SettingsStore.save(self.settings)
+                    TextInserter.insert(result.text, method: self.settings.insertMethod)
+                }
+            } catch {
+                await MainActor.run {
+                    RecordingOverlay.shared.hide()
+                    self.errorMessage = error.localizedDescription
+                }
+            }
+        }
+    }
+
     // MARK: - Hotkey-driven actions
 
     func handleTranslateSelection() {
@@ -564,7 +628,9 @@ final class AppState: ObservableObject {
             DispatchQueue.main.async {
                 guard let self else { return }
                 self.settings.lastUpdateCheck = Date()
-                self.saveSettings()
+                // Persist directly — saveSettings() would also reset the live language
+                // indicator, reload hotkey bindings and re-preload the Whisper model.
+                SettingsStore.save(self.settings)
                 guard let data,
                       let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                       let tag = json["tag_name"] as? String,

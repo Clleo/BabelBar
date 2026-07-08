@@ -176,19 +176,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         HotKeyManager.shared.configure(appState: appState)
         HotKeyManager.shared.start()
 
-        // Global voice shortcut: dictate at the cursor.
+        // Global voice shortcuts: dictate at the cursor (Fn) and dictate→translate→insert (Shift+Fn).
         VoiceHotkeys.shared.bindings = { [weak appState] in
             guard let s = appState, s.settings.voiceInputEnabled else { return [] }   // master off → no hotkeys
-            return [(s.settings.dictateHotkey, .dictateToCursor)]
+            var list: [(ModifierCombo, VoiceAction)] = []
+            if !s.settings.dictateHotkey.isEmpty {
+                list.append((s.settings.dictateHotkey, .dictateToCursor))
+            }
+            if !s.settings.translateDictateHotkey.isEmpty {
+                list.append((s.settings.translateDictateHotkey, .dictateTranslateToCursor))
+            }
+            return list
         }
         VoiceHotkeys.shared.onStart = { [weak appState] action in
             switch action {
-            case .dictateToCursor: appState?.startCursorDictation()
+            case .dictateToCursor:          appState?.startCursorDictation()
+            case .dictateTranslateToCursor: appState?.startCursorTranslateDictation()
             }
         }
         VoiceHotkeys.shared.onStop = { [weak appState] action in
             switch action {
-            case .dictateToCursor: appState?.stopCursorDictation()
+            case .dictateToCursor:          appState?.stopCursorDictation()
+            case .dictateTranslateToCursor: appState?.stopCursorTranslateDictation()
             }
         }
         VoiceHotkeys.shared.start()

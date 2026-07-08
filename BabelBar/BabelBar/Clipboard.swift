@@ -12,27 +12,6 @@ enum ClipboardHelper {
         NSPasteboard.general.string(forType: .string) ?? ""
     }
 
-    /// Simulates ⌘C in the frontmost app to copy the current selection,
-    /// then returns the new pasteboard contents.
-    static func copySelectionAndRead() -> String? {
-        let pb = NSPasteboard.general
-        let previousChange = pb.changeCount
-
-        simulateCmdC()
-
-        // Give the frontmost app a brief moment to write to the pasteboard.
-        let deadline = Date().addingTimeInterval(0.4)
-        while pb.changeCount == previousChange && Date() < deadline {
-            RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.02))
-        }
-        guard pb.changeCount != previousChange else { return nil }
-        return pb.string(forType: .string)
-    }
-
-    private static func simulateCmdC() {
-        postShortcut(virtualKey: 0x08) // C
-    }
-
     /// Simulates ⌘V in the frontmost app (pastes the current clipboard).
     /// Requires Accessibility permission.
     static func paste() {

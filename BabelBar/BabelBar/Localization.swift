@@ -33,7 +33,7 @@ enum LKey: String {
     case githubStar, recentlyStarred, starsWord
     case languagePreferences, interfaceLanguage, source, target, autoDetect
     // Voice
-    case dictateToCursor, triggerSound, showRecordingDot, duckAudio
+    case dictateToCursor, translateAtCursor, triggerSound, showRecordingDot, duckAudio
     // Permissions
     case permAccessibility, permInput, permScreen, permMic, permSpeech
     case granted, openSettings
@@ -57,7 +57,7 @@ enum LKey: String {
     // API status
     case apiOffline, apiNoTokens, apiOnline
     // Tooltips
-    case tipOpen, tipTranslateAuto, tipScreenshot, tipDictate, tipAIInstructions
+    case tipOpen, tipTranslateAuto, tipScreenshot, tipDictate, tipTranslateAtCursor, tipAIInstructions
     case tipShowRecordingDot, tipDuckAudio
 }
 
@@ -149,6 +149,10 @@ enum Loc {
         // Voice
         .dictateToCursor: r("Dictate to cursor", "Диктовать под курсор", "An Cursor diktieren", "Dictar en el cursor",
                            "Dicter au curseur", "Detta al cursore", "Ditar no cursor"),
+        .translateAtCursor: r("Dictate & translate to cursor", "Диктовать и переводить под курсор",
+                             "Diktieren & übersetzen an Cursor", "Dictar y traducir en el cursor",
+                             "Dicter et traduire au curseur", "Detta e traduci al cursore",
+                             "Ditar e traduzir no cursor"),
         .triggerSound: r("Trigger sound", "Звук запуска", "Auslöseton", "Sonido de activación",
                         "Son de déclenchement", "Suono di attivazione", "Som de ativação"),
         .showRecordingDot: r("Show recording indicator", "Показывать индикатор записи",
@@ -329,6 +333,14 @@ enum Loc {
             "Parlez et vos mots sont saisis là où se trouve le curseur, dans toute app. Maintenez le raccourci et parlez, ou appuyez pour démarrer et de nouveau pour arrêter.\n\nNécessite Accessibilité et Microphone. Si vous assignez Fn, réglez Fn sur « Ne rien faire » dans Réglages Système → Clavier.",
             "Parla e le tue parole vengono digitate proprio dove si trova il cursore, in qualsiasi app. Tieni premuta la scorciatoia e parla, o tocca per iniziare e tocca di nuovo per fermare.\n\nRichiede Accessibilità e Microfono. Se assegni Fn, imposta Fn su «Non fare nulla» in Impostazioni di Sistema → Tastiera.",
             "Fale e suas palavras são digitadas bem onde está o cursor, em qualquer app. Segure o atalho e fale, ou toque para começar e toque de novo para parar.\n\nRequer Acessibilidade e Microfone. Se atribuir Fn, defina Fn como «Não fazer nada» em Ajustes do Sistema → Teclado."),
+        .tipTranslateAtCursor: r(
+            "Speak in any app — your words are translated to the configured language in the background and typed right where the cursor is. Hold the hotkey and talk, or tap to start and tap again to stop.\n\nDirection follows your Source/Target settings (auto-detected). Needs Accessibility and Microphone. If you assign Fn, set Fn to “Do Nothing” in System Settings → Keyboard.",
+            "Говори в любом приложении — слова переводятся на заданный язык в фоне и печатаются прямо там, где стоит курсор. Удерживай хоткей и говори, или тапни, чтобы начать, и тапни снова, чтобы остановить.\n\nНаправление берётся из настроек «Источник/Цель» (определяется автоматически). Нужны «Универсальный доступ» и «Микрофон». Если назначишь Fn — в Системных настройках → Клавиатура поставь Fn на «Не выполнять действий».",
+            "Sprich in jeder App — deine Worte werden im Hintergrund in die eingestellte Sprache übersetzt und direkt am Cursor getippt. Halte das Kürzel gedrückt und sprich, oder tippe zum Starten und nochmals zum Stoppen.\n\nDie Richtung folgt deinen Quelle/Ziel-Einstellungen (automatisch erkannt). Benötigt Bedienungshilfen und Mikrofon. Wenn du Fn zuweist, stelle Fn in Systemeinstellungen → Tastatur auf „Nichts tun“.",
+            "Habla en cualquier app: tus palabras se traducen al idioma configurado en segundo plano y se escriben justo donde está el cursor. Mantén pulsado el atajo y habla, o toca para empezar y toca de nuevo para parar.\n\nLa dirección sigue tus ajustes de Origen/Destino (detección automática). Necesita Accesibilidad y Micrófono. Si asignas Fn, pon Fn en «No hacer nada» en Ajustes del Sistema → Teclado.",
+            "Parlez dans n’importe quelle app : vos mots sont traduits dans la langue configurée en arrière-plan et saisis là où se trouve le curseur. Maintenez le raccourci et parlez, ou appuyez pour démarrer et de nouveau pour arrêter.\n\nLe sens suit vos réglages Source/Cible (détection automatique). Nécessite Accessibilité et Microphone. Si vous assignez Fn, réglez Fn sur « Ne rien faire » dans Réglages Système → Clavier.",
+            "Parla in qualsiasi app: le tue parole vengono tradotte nella lingua configurata in background e digitate proprio dove si trova il cursore. Tieni premuta la scorciatoia e parla, o tocca per iniziare e tocca di nuovo per fermare.\n\nLa direzione segue le impostazioni Origine/Destinazione (rilevamento automatico). Richiede Accessibilità e Microfono. Se assegni Fn, imposta Fn su «Non fare nulla» in Impostazioni di Sistema → Tastiera.",
+            "Fale em qualquer app: suas palavras são traduzidas para o idioma configurado em segundo plano e digitadas bem onde está o cursor. Segure o atalho e fale, ou toque para começar e toque de novo para parar.\n\nA direção segue seus ajustes de Origem/Destino (detecção automática). Requer Acessibilidade e Microfone. Se atribuir Fn, defina Fn como «Não fazer nada» em Ajustes do Sistema → Teclado."),
         .tipAIInstructions: r(
             "Extra guidance for the translation model — e.g. fix typos, keep certain terms untranslated, or follow a style. Appended to the system prompt on every request.",
             "Дополнительные указания для модели перевода — например, исправлять опечатки, не переводить определённые термины или придерживаться стиля. Добавляются к системному промпту при каждом запросе.",
