@@ -2,6 +2,7 @@
 DerivedData/
 build/
 .build_output/
+.release_build/
 *-gaorlbbzfdocxmckayuyhepkwtyp/
 *-dnhsnjzyjofytrdohlmnibalouot/
 CompilationCache.noindex/
