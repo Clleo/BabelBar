@@ -310,6 +310,16 @@ struct SettingsView: View {
                 }
                 modelDownloadRow
             } else {
+                row(state.t(.provider)) {
+                    CapsulePicker(selection: Binding(
+                        get: { state.settings.transcriptionProvider },
+                        set: { newValue in
+                            state.settings.transcriptionProvider = newValue
+                            state.settings.transcriptionBaseURL = newValue.defaultBaseURL
+                            state.settings.transcriptionModel = newValue.defaultModel
+                        }
+                    ), options: TranscriptionProvider.allCases, title: { $0.rawValue }, width: 200)
+                }
                 row(state.t(.apiKey)) {
                     SecureField("gsk-…", text: $state.settings.transcriptionAPIKey)
                         .textFieldStyle(.plain).fieldStyle(fieldWidth)

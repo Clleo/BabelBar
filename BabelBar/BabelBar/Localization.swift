@@ -59,6 +59,11 @@ enum LKey: String {
     // Tooltips
     case tipOpen, tipTranslateAuto, tipScreenshot, tipDictate, tipTranslateAtCursor, tipAIInstructions
     case tipShowRecordingDot, tipDuckAudio
+    // Onboarding
+    case obWelcomeTitle, obWelcomeSubtitle, obBack, obContinue, obSkip, obGetStarted, obGrantAccess
+    case obPermAccessibilityDesc, obPermInputDesc, obPermScreenDesc, obPermMicDesc
+    case obApiKeyTitle, obApiKeySubtitle, obApiKeySkipNote, obGetApiKeyFmt
+    case obFinishTitle, obFinishSubtitle
 }
 
 enum Loc {
@@ -365,5 +370,88 @@ enum Loc {
             "Réduit le volume du système pendant la dictée, pour que la musique ou un autre son des haut-parleurs n’entre pas dans le micro. Le volume est rétabli dès l’arrêt.",
             "Abbassa il volume di sistema durante la dettatura, così la musica o altro audio dagli altoparlanti non entra nel microfono. Il volume viene ripristinato allo stop.",
             "Abaixa o volume do sistema enquanto você dita, para que música ou outro áudio dos alto-falantes não entre no microfone. O volume é restaurado ao parar."),
+
+        // Onboarding
+        .obWelcomeTitle: r("Welcome to BabelBar", "Добро пожаловать в BabelBar", "Willkommen bei BabelBar",
+                          "Bienvenido a BabelBar", "Bienvenue sur BabelBar", "Benvenuto in BabelBar",
+                          "Bem-vindo ao BabelBar"),
+        .obWelcomeSubtitle: r(
+            "Instant translation and voice dictation, right where you're typing. Let's get you set up in under a minute.",
+            "Мгновенный перевод и голосовой ввод прямо там, где ты печатаешь. Настроим всё меньше чем за минуту.",
+            "Sofortübersetzung und Spracheingabe, genau dort, wo du tippst. Die Einrichtung dauert weniger als eine Minute.",
+            "Traducción instantánea y dictado por voz, justo donde escribes. Vamos a configurarlo en menos de un minuto.",
+            "Traduction instantanée et dictée vocale, là où vous tapez. Configurons tout ça en moins d’une minute.",
+            "Traduzione istantanea e dettatura vocale, proprio dove stai scrivendo. Configuriamo tutto in meno di un minuto.",
+            "Tradução instantânea e ditado por voz, bem onde você está digitando. Vamos configurar tudo em menos de um minuto."),
+        .obBack: r("Back", "Назад", "Zurück", "Atrás", "Retour", "Indietro", "Voltar"),
+        .obContinue: r("Continue", "Продолжить", "Weiter", "Continuar", "Continuer", "Continua", "Continuar"),
+        .obSkip: r("Skip", "Пропустить", "Überspringen", "Omitir", "Ignorer", "Salta", "Pular"),
+        .obGetStarted: r("Get Started", "Начать работу", "Loslegen", "Empezar", "Commencer", "Inizia", "Começar"),
+        .obGrantAccess: r("Grant Access", "Разрешить доступ", "Zugriff erlauben", "Conceder acceso",
+                         "Autoriser l’accès", "Concedi accesso", "Conceder acesso"),
+        .obPermAccessibilityDesc: r(
+            "Lets BabelBar paste translations and typed dictation into whatever app you're working in.",
+            "Позволяет BabelBar вставлять переводы и надиктованный текст в любое приложение, где ты работаешь.",
+            "Ermöglicht BabelBar, Übersetzungen und diktierten Text in die App einzufügen, in der du gerade arbeitest.",
+            "Permite que BabelBar pegue traducciones y texto dictado en la app en la que estés trabajando.",
+            "Permet à BabelBar de coller les traductions et le texte dicté dans l’app où vous travaillez.",
+            "Consente a BabelBar di incollare traduzioni e testo dettato nell’app in cui stai lavorando.",
+            "Permite que o BabelBar cole traduções e texto ditado no app em que você está trabalhando."),
+        .obPermInputDesc: r(
+            "Lets BabelBar detect its global shortcuts — like double-tapping ⌘C to translate a selection — from any app.",
+            "Позволяет BabelBar отслеживать глобальные хоткеи — например, двойное ⌘C для перевода выделения — в любом приложении.",
+            "Ermöglicht BabelBar, seine globalen Tastenkürzel zu erkennen — z. B. doppeltes ⌘C zum Übersetzen einer Auswahl — in jeder App.",
+            "Permite que BabelBar detecte sus atajos globales — como pulsar ⌘C dos veces para traducir una selección — en cualquier app.",
+            "Permet à BabelBar de détecter ses raccourcis globaux — comme un double ⌘C pour traduire une sélection — dans toute app.",
+            "Consente a BabelBar di rilevare le sue scorciatoie globali — come doppio ⌘C per tradurre una selezione — in qualsiasi app.",
+            "Permite que o BabelBar detecte seus atalhos globais — como pressionar ⌘C duas vezes para traduzir uma seleção — em qualquer app."),
+        .obPermScreenDesc: r(
+            "Lets BabelBar capture a screen region so it can recognize and translate the text in it.",
+            "Позволяет BabelBar захватывать область экрана, чтобы распознать и перевести текст на ней.",
+            "Ermöglicht BabelBar, einen Bildschirmbereich zu erfassen, um den Text darin zu erkennen und zu übersetzen.",
+            "Permite que BabelBar capture una zona de la pantalla para reconocer y traducir el texto que contiene.",
+            "Permet à BabelBar de capturer une zone de l’écran pour reconnaître et traduire le texte qu’elle contient.",
+            "Consente a BabelBar di catturare un’area dello schermo per riconoscere e tradurre il testo al suo interno.",
+            "Permite que o BabelBar capture uma área da tela para reconhecer e traduzir o texto nela."),
+        .obPermMicDesc: r(
+            "Lets BabelBar record your voice for dictation and voice-to-translation.",
+            "Позволяет BabelBar записывать твой голос для диктовки и голосового перевода.",
+            "Ermöglicht BabelBar, deine Stimme für Diktat und Sprachübersetzung aufzuzeichnen.",
+            "Permite que BabelBar grabe tu voz para el dictado y la traducción por voz.",
+            "Permet à BabelBar d’enregistrer votre voix pour la dictée et la traduction vocale.",
+            "Consente a BabelBar di registrare la tua voce per la dettatura e la traduzione vocale.",
+            "Permite que o BabelBar grave sua voz para ditado e tradução por voz."),
+        .obApiKeyTitle: r("Connect a Translation Provider", "Подключи провайдера перевода",
+                         "Übersetzungsanbieter verbinden", "Conecta un proveedor de traducción",
+                         "Connectez un fournisseur de traduction", "Collega un provider di traduzione",
+                         "Conecte um provedor de tradução"),
+        .obApiKeySubtitle: r(
+            "BabelBar uses your own API key with OpenAI, DeepSeek, or another compatible provider — your text goes straight to them, never through our servers.",
+            "BabelBar использует твой собственный API-ключ — OpenAI, DeepSeek или другой совместимый провайдер. Текст уходит напрямую к нему, минуя наши серверы.",
+            "BabelBar nutzt deinen eigenen API-Schlüssel — OpenAI, DeepSeek oder einen anderen kompatiblen Anbieter. Dein Text geht direkt dorthin, nie über unsere Server.",
+            "BabelBar usa tu propia clave API — OpenAI, DeepSeek u otro proveedor compatible. Tu texto va directo a ellos, nunca por nuestros servidores.",
+            "BabelBar utilise votre propre clé API — OpenAI, DeepSeek ou un autre fournisseur compatible. Votre texte va directement chez eux, jamais via nos serveurs.",
+            "BabelBar usa la tua chiave API — OpenAI, DeepSeek o un altro provider compatibile. Il tuo testo va direttamente a loro, mai attraverso i nostri server.",
+            "O BabelBar usa sua própria chave de API — OpenAI, DeepSeek ou outro provedor compatível. Seu texto vai direto para eles, nunca pelos nossos servidores."),
+        .obApiKeySkipNote: r(
+            "No key yet? Skip this — you can add one anytime in Settings → API.",
+            "Нет ключа? Пропусти этот шаг — добавить его можно в любой момент в Настройки → API.",
+            "Noch keinen Schlüssel? Überspringe diesen Schritt — du kannst jederzeit einen in Einstellungen → API hinzufügen.",
+            "¿Aún sin clave? Omite este paso — puedes añadir una cuando quieras en Ajustes → API.",
+            "Pas encore de clé ? Ignorez cette étape — vous pourrez en ajouter une à tout moment dans Réglages → API.",
+            "Non hai ancora una chiave? Salta questo passaggio — puoi aggiungerla in qualsiasi momento in Impostazioni → API.",
+            "Ainda sem chave? Pule esta etapa — você pode adicionar uma a qualquer momento em Configurações → API."),
+        .obGetApiKeyFmt: r("Get a %@ API key", "Получить API-ключ %@", "%@ API-Schlüssel holen", "Obtener una clave API de %@",
+                          "Obtenir une clé API %@", "Ottieni una chiave API %@", "Obter uma chave de API da %@"),
+        .obFinishTitle: r("You're all set!", "Всё готово!", "Fertig eingerichtet!", "¡Todo listo!",
+                         "Tout est prêt !", "Tutto pronto!", "Tudo pronto!"),
+        .obFinishSubtitle: r(
+            "Here are the shortcuts you'll use most. You can change any of them later in Settings.",
+            "Вот хоткеи, которые ты будешь использовать чаще всего. Их можно изменить позже в Настройках.",
+            "Hier sind die Kürzel, die du am häufigsten brauchst. Du kannst sie später in den Einstellungen ändern.",
+            "Estos son los atajos que más usarás. Puedes cambiarlos luego en Ajustes.",
+            "Voici les raccourcis que vous utiliserez le plus. Vous pourrez les modifier plus tard dans les Réglages.",
+            "Ecco le scorciatoie che userai più spesso. Potrai cambiarle in seguito nelle Impostazioni.",
+            "Aqui estão os atalhos que você mais usará. Você pode alterá-los depois em Configurações."),
     ]
 }

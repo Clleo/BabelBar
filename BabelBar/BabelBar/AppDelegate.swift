@@ -152,6 +152,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
     private var panel: KeyableBorderlessWindow?
     private var settingsWindow: NSWindow?
+    private var onboardingWindow: NSWindow?
+    private static let onboardingCompletedKey = "babelbar.onboardingCompleted"
     let appState = AppState()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -205,6 +207,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Keep window chrome (light/dark appearance + blur material) in sync with the theme.
         appState.theme.onChromeChanged = { [weak self] in self?.applyChrome() }
         applyChrome()
+
+        showOnboardingIfNeeded()
     }
 
     private func nsAppearance(_ isDark: Bool) -> NSAppearance? {
@@ -214,7 +218,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func applyChrome() {
         let a = nsAppearance(appState.theme.currentIsDark)
         let blurAlpha = appState.theme.blurAlpha
-        for window in [panel, settingsWindow].compactMap({ $0 }) {
+        for window in [panel, settingsWindow, onboardingWindow].compactMap({ $0 }) {
             window.appearance = a
             (window.contentViewController as? BlurContainerViewController)?
                 .applyChrome(blurAlpha: blurAlpha, appearance: a)
@@ -428,6 +432,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// when everything is closed → back to a pure menu-bar accessory.
     private func updateActivationPolicy() {
         let anyOpen = (panel?.isVisible ?? false) || (settingsWindow?.isVisible ?? false)
+            || (onboardingWindow?.isVisible ?? false)
         let desired: NSApplication.ActivationPolicy = anyOpen ? .regular : .accessory
         guard NSApp.activationPolicy() != desired else { return }
         NSApp.setActivationPolicy(desired)
@@ -498,5 +503,57 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func closeSettings() {
         settingsWindow?.orderOut(nil)
         updateActivationPolicy()   // drop the Dock icon when settings closes
+    }
+
+    // MARK: - Onboarding (first-launch setup wizard)
+
+    private func showOnboardingIfNeeded() {
+        guard !UserDefaults.standard.bool(forKey: Self.onboardingCompletedKey) else { return }
+        showOnboarding()
+    }
+
+    private func showOnboarding() {
+        if let win = onboardingWindow {
+            win.center()
+            win.makeKeyAndOrderFront(nil)
+            updateActivationPolicy()
+            NSApp.activate(ignoringOtherApps: true)
+            return
+        }
+        let content = OnboardingWindowView(onFinish: { [weak self] in self?.finishOnboarding() })
+            .environmentObject(appState)
+            .environmentObject(appState.theme)
+        let hosting = NSHostingController(rootView: content)
+        let container = BlurContainerViewController(content: hosting, radius: 16, tracksPreferredSize: false)
+
+        // Fixed-size, non-resizable — a short guided wizard, not a resizable workspace window.
+        let window = KeyableBorderlessWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 560, height: 620),
+            styleMask: [.borderless, .fullSizeContentView],
+            backing: .buffered, defer: false
+        )
+        window.contentViewController = container
+        window.isMovableByWindowBackground = true
+        window.backgroundColor = .clear
+        window.isOpaque = false
+        window.hasShadow = true
+        window.isReleasedWhenClosed = false
+        window.appearance = nsAppearance(appState.theme.currentIsDark)
+        container.view.appearance = nsAppearance(appState.theme.currentIsDark)
+        window.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
+        onboardingWindow = window
+        enableBackdropHosting(window)
+        applyChrome()
+        window.center()
+        window.makeKeyAndOrderFront(nil)
+        updateActivationPolicy()
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    private func finishOnboarding() {
+        UserDefaults.standard.set(true, forKey: Self.onboardingCompletedKey)
+        onboardingWindow?.orderOut(nil)
+        updateActivationPolicy()
+        showPanel()
     }
 }

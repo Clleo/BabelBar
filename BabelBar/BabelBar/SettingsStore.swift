@@ -32,6 +32,32 @@ enum APIProvider: String, CaseIterable, Identifiable, Codable {
     }
 }
 
+/// Provider for remote (cloud) Whisper transcription — separate from `APIProvider` because
+/// transcription needs a Whisper *audio* model (e.g. "whisper-large-v3"), not a chat model,
+/// even when hosted on the same endpoint as a chat provider (Groq serves both).
+enum TranscriptionProvider: String, CaseIterable, Identifiable, Codable {
+    case groq = "Groq"
+    case openai = "OpenAI"
+    case custom = "Custom"
+    var id: String { rawValue }
+
+    var defaultBaseURL: String {
+        switch self {
+        case .groq:   return "https://api.groq.com/openai/v1"
+        case .openai: return "https://api.openai.com/v1"
+        case .custom: return ""
+        }
+    }
+
+    var defaultModel: String {
+        switch self {
+        case .groq:   return "whisper-large-v3"
+        case .openai: return "whisper-1"
+        case .custom: return "whisper-large-v3"
+        }
+    }
+}
+
 enum Appearance: String, CaseIterable, Identifiable, Codable {
     case light = "Light"
     case dark = "Dark"
@@ -123,6 +149,7 @@ struct AppSettings: Codable {
     var insertMethod: InsertMethod = .paste
     var whisperCleanup = false          // run an LLM "auto-edit" pass over the raw transcript
     // Remote (cloud) Whisper transcription account (separate from the text-translation API).
+    var transcriptionProvider: TranscriptionProvider = .groq
     var transcriptionBaseURL = "https://api.groq.com/openai/v1"
     var transcriptionModel = "whisper-large-v3"
     var transcriptionAPIKey = ""
@@ -136,7 +163,7 @@ struct AppSettings: Codable {
         case openHotKey, selectionHotKey, screenshotHotKey
         case dictateHotkey, translateDictateHotkey, voiceInputEnabled, voiceSoundEnabled, voiceSoundName, voiceSoundVolume, showRecordingDot, duckAudio
         case speechEngine, whisperModel, insertMethod, whisperCleanup
-        case transcriptionBaseURL, transcriptionModel
+        case transcriptionProvider, transcriptionBaseURL, transcriptionModel
     }
 
     init() {}
@@ -177,6 +204,7 @@ struct AppSettings: Codable {
         whisperModel = (try? c.decode(WhisperModel.self, forKey: .whisperModel)) ?? .base
         insertMethod = (try? c.decode(InsertMethod.self, forKey: .insertMethod)) ?? .paste
         whisperCleanup = (try? c.decode(Bool.self, forKey: .whisperCleanup)) ?? false
+        transcriptionProvider = (try? c.decode(TranscriptionProvider.self, forKey: .transcriptionProvider)) ?? .groq
         transcriptionBaseURL = (try? c.decode(String.self, forKey: .transcriptionBaseURL)) ?? "https://api.groq.com/openai/v1"
         transcriptionModel = (try? c.decode(String.self, forKey: .transcriptionModel)) ?? "whisper-large-v3"
     }

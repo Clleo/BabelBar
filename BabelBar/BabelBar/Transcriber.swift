@@ -6,6 +6,7 @@ import WhisperKit
 enum TranscriberError: LocalizedError {
     case missingKey
     case http(Int)
+    case httpMessage(Int, String)
     case badResponse
     case modelNotReady
 
@@ -13,6 +14,7 @@ enum TranscriberError: LocalizedError {
         switch self {
         case .missingKey:    return "Transcription API key is missing."
         case .http(let c):   return "Transcription failed (HTTP \(c))."
+        case .httpMessage(let c, let m): return "Transcription failed (HTTP \(c)): \(m)"
         case .badResponse:   return "Transcription returned no text."
         case .modelNotReady: return "Speech model is not downloaded yet."
         }
@@ -53,7 +55,19 @@ struct RemoteWhisperTranscriber: Transcriber {
 
         let (data, response) = try await URLSession.shared.data(for: req)
         let code = (response as? HTTPURLResponse)?.statusCode ?? 0
-        guard code == 200 else { throw TranscriberError.http(code) }
+        guard code == 200 else {
+            // Surface the provider's own error message (OpenAI/Groq-style {"error":{"message":...}})
+            // instead of a bare status code, so a bad model/URL/key is actionable from the UI.
+            if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                if let err = json["error"] as? [String: Any], let msg = err["message"] as? String {
+                    throw TranscriberError.httpMessage(code, msg)
+                }
+                if let msg = json["message"] as? String {
+                    throw TranscriberError.httpMessage(code, msg)
+                }
+            }
+            throw TranscriberError.http(code)
+        }
         if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
            let text = json["text"] as? String {
             return text.trimmingCharacters(in: .whitespacesAndNewlines)

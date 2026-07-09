@@ -346,6 +346,11 @@ final class AppState: ObservableObject {
         settings.sourceLang == .auto ? nil : concrete(settings.sourceLang)
     }
 
+    /// Request microphone access without starting a recording (used by onboarding).
+    func requestMicrophoneAccess(_ completion: @escaping (Bool) -> Void) {
+        dictationEngine.requestMic(completion)
+    }
+
     private func playTriggerSound() {
         if settings.voiceSoundEnabled {
             SystemSounds.play(settings.voiceSoundName, volume: Float(settings.voiceSoundVolume))
