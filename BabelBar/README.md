@@ -21,6 +21,8 @@ The app needs these macOS permissions (System Settings → Privacy & Security):
 - `⌘ + C + C` (double Cmd-C) — translate the current selection
 - `⇧ + ⌘ + 2` — capture a screen region, OCR it, translate
 - `⌘ + Return` — translate the input field
+- `Fn` — dictate, insert at cursor
+- `Shift + Fn` — dictate, then translate the recognized text
 
 ## Translation API
 Open **Settings (gear icon)** → API Settings. Choose a provider:
@@ -28,14 +30,15 @@ Open **Settings (gear icon)** → API Settings. Choose a provider:
 - **DeepSeek** — `https://api.deepseek.com/v1`, model `deepseek-chat`
 - **Custom** — any OpenAI-compatible `/chat/completions` endpoint
 
-Paste your API key (stored in the macOS **Keychain**). Other settings persist in `UserDefaults`.
+Paste your API key. All settings (API key, providers, preferences) persist in `UserDefaults` — no password dialog.
 
 ## Architecture
 - `AppDelegate` — `NSStatusItem` + detachable `NSPopover` (arrow hides when detached); pin = floating window level.
 - `HotKeyManager` — Carbon global hotkeys + `NSEvent` global monitor for double ⌘C.
 - `TranslationService` — OpenAI-compatible chat-completions client.
 - `ScreenCapture` — `screencapture -i` + Vision OCR (`VNRecognizeTextRequest`, ru/en).
-- `Keychain` / `SettingsStore` — secure key storage + persisted preferences.
+- `Transcriber` — Voice-to-text (WhisperKit local or Groq remote), model auto-management, audio ducking.
+- `SettingsStore` — persisted preferences + API key (UserDefaults, no Keychain).
 - `Views/` — `RootView`, `TranslatorView`, `SettingsView`, `Theme` (navy glassmorphism, dark default).
 
 ## Notes

@@ -2,9 +2,9 @@
 
 Документ для разработчика или AI-агента, который заходит в папку проекта и должен быстро понять: что это, как устроено, на каком этапе находится и где что менять.
 
-> **Имена.** Отображаемое имя приложения — **BabelBar**. Внутреннее имя Xcode-проекта,
-> таргета, схемы и bundle id остаётся `BabelBar` / `com.translatebar.app` (переименование
-> сломало бы подпись и пути сборки). Поэтому в коде и командах фигурирует `BabelBar`.
+> **Имена.** Отображаемое имя приложения — **BabelBar**. Bundle ID — `com.babelbar.app`.
+> Внутреннее имя Xcode-проекта, таргета и схемы остаётся `BabelBar`.
+> Переименование сломало бы подпись и пути сборки. Поэтому в коде и командах фигурирует `BabelBar`.
 
 ---
 
@@ -55,6 +55,7 @@ BabelBar/                         ← корень проекта
     ├── TranslationService.swift      ← клиент перевода (OpenAI-совместимый)
     ├── Clipboard.swift               ← работа с буфером, синтетический ⌘C
     ├── ScreenCapture.swift           ← скриншот области + Vision OCR
+    ├── Transcriber.swift             ← Voice recognition (Whisper: local/remote, модели, валидация)
     ├── HotKeyManager.swift           ← глобальные хоткеи (Carbon + NSEvent monitor)
     ├── Info.plist                    ← LSUIElement, usage descriptions
     ├── BabelBar.entitlements     ← права (sandbox выключен, network client)
@@ -134,11 +135,12 @@ BabelBar/                         ← корень проекта
 ### SettingsStore.swift
 - `enum APIProvider` (openai / deepseek / custom) с дефолтными `baseURL` и `model`.
 - `enum Appearance` (light / dark / system).
-- `struct AppSettings: Codable` — все настройки **кроме** API-ключа (ключ в Keychain). Кастомный `init(from:)` устойчив к отсутствующим полям.
-- `SettingsStore.load()/save()` — JSON в `UserDefaults` под ключом `translatebar.settings`.
+- `struct AppSettings: Codable` — все настройки **включая** API-ключ. Кастомный `init(from:)` устойчив к отсутствующим полям.
+- `SettingsStore.load()/save()` — JSON в `UserDefaults` под ключом `babelbar.settings` (API-ключ хранится там же, без диалога пароля).
+- Миграция: старые ключи (`translatebar.*`) игнорируются.
 
 ### Keychain.swift
-Обёртка над Security framework. `setAPIKey()` / `apiKey()` — ключ хранится как generic password (service `com.translatebar.apikey`).
+⚠️ Устарело — **больше не используется**. API-ключ теперь хранится в `UserDefaults` вместе с остальными настройками (без диалога пароля macOS).
 
 ### TranslationService.swift
 `translate(text:from:to:settings:)` — собирает запрос к `{baseURL}/chat/completions`:
@@ -160,6 +162,17 @@ BabelBar/                         ← корень проекта
 Глобальные хоткеи:
 - `⌥ + Space` и `⇧ + ⌘ + 2` — через Carbon `RegisterEventHotKey` + `InstallEventHandler`.
 - `⌘ + C + C` (двойной ⌘C) — через `NSEvent.addGlobalMonitorForEvents`, считает два нажатия в пределах 0.5 c.
+
+### Transcriber.swift
+Голосовое распознавание (Voice-to-Text). Содержит:
+- `protocol Transcriber` — интерфейс для разных реализаций.
+- `LocalWhisperTranscriber` — использует **WhisperKit** (on-device, CoreML, быстро, приватно). Автоматически скачивает и кэширует Whisper модели в `~/.cache/whisper/` при первом использовании.
+- `RemoteWhisperTranscriber` — отправляет аудио на **Groq Whisper API** (требует ключ, но облако).
+- `WhisperModelManager` — управляет кэшем моделей. **Недавнее улучшение (v1.0.8)**: правильная валидация папок (отличает полные корректные загрузки от промежуточных кэш-папок, автоисцеляется при миграции).
+- `AudioRecorder` — захват аудио с микрофона (буферизация, нормализация громкости).
+- Audio ducking: система автоматически понижает громкость во время диктовки.
+
+**Дефолт**: LocalWhisperKit (первый запуск → скачивание модели, ~600 MB). Хоткей: **Fn** = диктовка + вставка, **Shift+Fn** = диктовка + перевод.
 
 ### Views/Theme.swift
 Палитра (`bgTop/bgBottom` — тёмный navy-charcoal, `accentBlue/Purple/Green`), модификатор `glassPanel(corner:)` (полупрозрачная панель + тонкий бордер), `IconButton`.
@@ -192,6 +205,8 @@ BabelBar/                         ← корень проекта
 - Hover-эффекты на всех кнопках.
 - Глобальные хоткеи: ⌥Space, ⇧⌘2, и ⌘+C+C — **независимо от раскладки** (матч по keyCode).
 - API-ключ хранится в **UserDefaults** (не Keychain) — без диалога пароля macOS.
+- **Voice Recognition** (Whisper) — локальное (WhisperKit, первый запуск ~600 MB) или удалённое (Groq API).
+  Автоматическая загрузка моделей с правильной валидацией (отличает полные загрузки от промежуточного кэша).
 - **Стабильная подпись** сертификатом Apple Development → выданные разрешения
   (Мониторинг ввода) не слетают при пересборках.
 
@@ -232,8 +247,8 @@ BabelBar/                         ← корень проекта
 
 ## 9. Актуальное состояние (для продолжения в новой сессии)
 
-Отображаемое имя — **BabelBar** (внутренний проект/таргет/bundle остаются `BabelBar`,
-`com.translatebar.app`). Подпись — **Apple Development** (стабильно, разрешения не слетают):
+**Версия**: 1.0.8 (build 5). Отображаемое имя — **BabelBar** (bundle ID `com.babelbar.app`).
+Подпись — **Apple Development** (стабильно, разрешения не слетают):
 `codesign --force --deep --options runtime --entitlements BabelBar/BabelBar.entitlements
 --sign 9A9B8DDE5265383479D320E3A0DC5037DC3792C9 <app>`.
 
@@ -246,6 +261,10 @@ BabelBar/                         ← корень проекта
 **Перевод** (`AppState.swift`, `TranslationService.swift`): авто-определение направления RU⇄EN;
 оба поля редактируемые (нижнее → обратный перевод по Enter); **два провайдера** с авто-fallback;
 реальный счётчик токенов. Провайдеры: OpenAI/DeepSeek/z.ai/Claude/Groq/Custom.
+
+**Голос** (Transcriber.swift): локальная (WhisperKit) или удалённая (Groq API) транскрипция.
+Хоткеи: **Fn** (диктовка), **Shift+Fn** (диктовка + перевод). Автоматическое управление моделями.
+v1.0.8: улучшена валидация Whisper моделей (корректно отличает полные загрузки от кэш-папок).
 
 **Тема — модуль ThemeKit** (`ThemeKit.swift` + `InlineColorPicker.swift`): отдельные палитры
 dark/light (Accent/Background/Surface/Foreground + Contrast/BackgroundOpacity/Blur per-theme),
