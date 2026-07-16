@@ -243,17 +243,26 @@ final class WhisperModelManager: ObservableObject {
     private var task: Task<Void, Never>?
     private let key = "babelbar.whisperModelFolders"
 
+    /// A folder counts as a fully-downloaded model only if it is the CoreML variant directory
+    /// (`openai_whisper-<variant>`) that actually holds the compiled encoder — and is NOT inside
+    /// HuggingFace's `.cache/` download-staging tree. The tokenizer-only `openai/whisper-<variant>`
+    /// folder and the 2 KB `.cache/.../openai_whisper-<variant>` pointer folder both fail this,
+    /// so they can never be mistaken for a real download.
+    nonisolated static func isValidModelFolder(_ url: URL, variant: String) -> Bool {
+        guard !url.path.contains("/.cache/"),
+              url.lastPathComponent == "openai_whisper-\(variant)" else { return false }
+        return FileManager.default.fileExists(
+            atPath: url.appendingPathComponent("AudioEncoder.mlmodelc").path)
+    }
+
     /// Nonisolated disk check so non-MainActor callers (AppState) can gate prewarming
     /// without auto-triggering a download.
     nonisolated static func isVariantOnDisk(_ variant: String) -> Bool {
         let fm = FileManager.default
         guard let en = fm.enumerator(at: WhisperPaths.modelsDir,
                                      includingPropertiesForKeys: [.isDirectoryKey]) else { return false }
-        for case let url as URL in en where !url.path.contains("/.cache/") {
-            if url.lastPathComponent == "openai_whisper-\(variant)",
-               fm.fileExists(atPath: url.appendingPathComponent("AudioEncoder.mlmodelc").path) {
-                return true
-            }
+        for case let url as URL in en where isValidModelFolder(url, variant: variant) {
+            return true
         }
         return false
     }
@@ -269,8 +278,14 @@ final class WhisperModelManager: ObservableObject {
 
     /// Resolved on-disk folder for a model (recorded path, or discovered by scanning).
     func folderURL(_ m: WhisperModel) -> URL? {
-        if let p = folders[m.variant], FileManager.default.fileExists(atPath: p) {
-            return URL(fileURLWithPath: p)
+        // A recorded path counts only if it still points at a real model folder. Older builds
+        // sometimes persisted the 2 KB `.cache/.../openai_whisper-<variant>` staging folder, which
+        // made the UI report "Downloaded · 2 KB" while the actual weights sat unused nearby.
+        // Reject such stale/invalid paths and re-scan so we heal automatically.
+        if let p = folders[m.variant] {
+            let url = URL(fileURLWithPath: p)
+            if Self.isValidModelFolder(url, variant: m.variant) { return url }
+            folders[m.variant] = nil; persist()
         }
         if let found = scan(for: m.variant) {
             folders[m.variant] = found.path; persist()
@@ -355,16 +370,15 @@ final class WhisperModelManager: ObservableObject {
 
     private func persist() { UserDefaults.standard.set(folders, forKey: key) }
 
-    /// Find a downloaded model folder by matching the variant token in a directory name.
+    /// Find a fully-downloaded model folder for this variant. Matches only the real CoreML
+    /// directory (encoder present, not `.cache/` staging) so tokenizer-only and partial folders
+    /// are never returned.
     private func scan(for variant: String) -> URL? {
         let fm = FileManager.default
         guard let en = fm.enumerator(at: WhisperPaths.modelsDir,
                                      includingPropertiesForKeys: [.isDirectoryKey]) else { return nil }
-        for case let url as URL in en {
-            if (try? url.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true,
-               url.lastPathComponent.contains(variant) {
-                return url
-            }
+        for case let url as URL in en where Self.isValidModelFolder(url, variant: variant) {
+            return url
         }
         return nil
     }
