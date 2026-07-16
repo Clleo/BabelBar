@@ -21,6 +21,12 @@ struct ModifierCombo: Codable, Equatable {
 
     var isEmpty: Bool { !(fn || shift || control || option || command) }
 
+    /// True when every modifier of `other` is also held here (`Shift+Fn` contains `Fn`).
+    func contains(_ other: ModifierCombo) -> Bool {
+        (!other.fn || fn) && (!other.shift || shift) && (!other.control || control)
+            && (!other.option || option) && (!other.command || command)
+    }
+
     var display: String {
         var parts: [String] = []
         if control { parts.append("⌃") }
@@ -107,6 +113,13 @@ final class VoiceHotkeys {
     private var pressStart = Date()
     private var prevHeld = false
     private let tapThreshold: TimeInterval = 0.4   // < this on release = treat as a tap (toggle)
+
+    // Modifiers of a combo arrive as separate flagsChanged events, so "Shift+Fn" can be
+    // seen as a bare "Fn" first. When a matched combo is also the prefix of a longer
+    // binding we let the flags settle before committing to an action.
+    private var latestCombo = ModifierCombo()
+    private var startPending = false
+    private let comboSettleDelay: TimeInterval = 0.15
 
     /// Re-snapshot the bindings. Call on the main thread (reads app state).
     func refreshBindings() {
@@ -207,16 +220,48 @@ final class VoiceHotkeys {
         return snapshotBindings().first { $0.0 == c }
     }
 
+    /// True when a longer binding could still be completed from `c` (e.g. `Fn` → `Shift+Fn`).
+    private func isPrefixOfLongerBinding(_ c: ModifierCombo) -> Bool {
+        snapshotBindings().contains { $0.0 != c && $0.0.contains(c) }
+    }
+
+    private func begin(_ combo: ModifierCombo, _ action: VoiceAction, pressedAt: Date) {
+        phase = .holdPending
+        activeAction = action
+        activeCombo = combo
+        pressStart = pressedAt
+        prevHeld = true
+        onStart?(action)
+    }
+
     private func process(current: ModifierCombo) {
+        latestCombo = current
+
         switch phase {
         case .idle:
-            if let (combo, action) = match(current) {
-                phase = .holdPending
-                activeAction = action
-                activeCombo = combo
-                pressStart = Date()
-                prevHeld = true
-                onStart?(action)
+            guard !startPending, let (combo, action) = match(current) else { return }
+            guard isPrefixOfLongerBinding(combo) else {
+                begin(combo, action, pressedAt: Date())
+                return
+            }
+            // Wait for the remaining modifiers before committing, so "Shift+Fn" isn't
+            // started as a plain "Fn" dictation session.
+            startPending = true
+            let pressedAt = Date()
+            DispatchQueue.main.asyncAfter(deadline: .now() + comboSettleDelay) { [weak self] in
+                guard let self else { return }
+                self.startPending = false
+                guard self.phase == .idle else { return }
+                let settled = self.latestCombo
+                if let (c, a) = self.match(settled) {
+                    self.begin(c, a, pressedAt: pressedAt)
+                } else {
+                    // Released within the settle window: start the original action and
+                    // immediately replay the current (released) flags so the tap/hold
+                    // state machine still sees the release.
+                    self.begin(combo, action, pressedAt: pressedAt)
+                    self.process(current: settled)
+                }
             }
 
         case .holdPending, .toggling, .toggleStopPending:
