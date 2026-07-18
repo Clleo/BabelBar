@@ -30,7 +30,7 @@ Open **Settings (gear icon)** → API Settings. Choose a provider:
 - **DeepSeek** — `https://api.deepseek.com/v1`, model `deepseek-chat`
 - **Custom** — any OpenAI-compatible `/chat/completions` endpoint
 
-Paste your API key. All settings (API key, providers, preferences) persist in `UserDefaults` — no password dialog.
+Paste your API key (stored in the macOS **Keychain**). Other settings persist in `UserDefaults`.
 
 ## Architecture
 - `AppDelegate` — `NSStatusItem` + detachable `NSPopover` (arrow hides when detached); pin = floating window level.
@@ -38,7 +38,7 @@ Paste your API key. All settings (API key, providers, preferences) persist in `U
 - `TranslationService` — OpenAI-compatible chat-completions client.
 - `ScreenCapture` — `screencapture -i` + Vision OCR (`VNRecognizeTextRequest`, ru/en).
 - `Transcriber` — Voice-to-text (WhisperKit local or Groq remote), model auto-management, audio ducking.
-- `SettingsStore` — persisted preferences + API key (UserDefaults, no Keychain).
+- `Keychain` / `SettingsStore` — API keys in the Keychain, other preferences in `UserDefaults`.
 - `Views/` — `RootView`, `TranslatorView`, `SettingsView`, `Theme` (navy glassmorphism, dark default).
 
 ## Notes

@@ -135,12 +135,12 @@ BabelBar/                         ← корень проекта
 ### SettingsStore.swift
 - `enum APIProvider` (openai / deepseek / custom) с дефолтными `baseURL` и `model`.
 - `enum Appearance` (light / dark / system).
-- `struct AppSettings: Codable` — все настройки **включая** API-ключ. Кастомный `init(from:)` устойчив к отсутствующим полям.
-- `SettingsStore.load()/save()` — JSON в `UserDefaults` под ключом `babelbar.settings` (API-ключ хранится там же, без диалога пароля).
+- `struct AppSettings: Codable` — все настройки **кроме** секретов (`apiKey`, `apiKey2`, `transcriptionAPIKey` намеренно не входят в `CodingKeys`). Кастомный `init(from:)` устойчив к отсутствующим полям.
+- `SettingsStore.load()/save()` — JSON в `UserDefaults` под ключом `babelbar.settings`; секреты читаются/пишутся через `Keychain`, в JSON не попадают.
 - Миграция: старые ключи (`translatebar.*`) игнорируются.
 
 ### Keychain.swift
-⚠️ Устарело — **больше не используется**. API-ключ теперь хранится в `UserDefaults` вместе с остальными настройками (без диалога пароля macOS).
+Обёртка над Security framework. `set(_:for:)` / `get(_:)` — секреты хранятся как generic password в service `com.babelbar.secrets`, аккаунты: `apiKey`, `apiKey2`, `transcriptionAPIKey`, `license`.
 
 ### TranslationService.swift
 `translate(text:from:to:settings:)` — собирает запрос к `{baseURL}/chat/completions`:
@@ -204,7 +204,7 @@ BabelBar/                         ← корень проекта
 - Текстовые поля — свой `PlainTextView` (NSTextView): без скроллбаров, белый текст в тёмной теме.
 - Hover-эффекты на всех кнопках.
 - Глобальные хоткеи: ⌥Space, ⇧⌘2, и ⌘+C+C — **независимо от раскладки** (матч по keyCode).
-- API-ключ хранится в **UserDefaults** (не Keychain) — без диалога пароля macOS.
+- API-ключи (перевод + транскрипция) хранятся в **Keychain** (service `com.babelbar.secrets`); остальные настройки — в `UserDefaults`.
 - **Voice Recognition** (Whisper) — локальное (WhisperKit, первый запуск ~600 MB) или удалённое (Groq API).
   Автоматическая загрузка моделей с правильной валидацией (отличает полные загрузки от промежуточного кэша).
 - **Стабильная подпись** сертификатом Apple Development → выданные разрешения
@@ -220,7 +220,6 @@ BabelBar/                         ← корень проекта
 - Хоткеи в настройках — статичные бейджи (не переназначаются из UI).
 - Индикатор API не пингует endpoint (смотрит только наличие ключа и лимит токенов).
 - Лимит токенов (`tokensLimit`) задаётся по умолчанию (500 000); провайдеры не отдают «лимит в токенах» по API.
-- `Keychain.swift` остался в проекте, но больше не используется (ключ в UserDefaults).
 
 ---
 
@@ -290,4 +289,4 @@ dark/light (Accent/Background/Surface/Foreground + Contrast/BackgroundOpacity/Bl
 
 **Новые файлы:** `KeyCombo.swift`, `ThemeKit.swift`, `InlineColorPicker.swift`, `SystemAccess.swift`,
 `SpeechDictation.swift`, `VoiceInput.swift`, `RecordingOverlay.swift`. Все добавлены в
-`project.pbxproj` (ручные id `...0020`–`...0026`). `Keychain.swift` не используется.
+`project.pbxproj` (ручные id `...0020`–`...0026`).
