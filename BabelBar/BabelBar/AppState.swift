@@ -341,10 +341,14 @@ final class AppState: ObservableObject {
 
     private let dictationEngine = DictationEngine()
 
-    /// Whisper language hint: the configured Source language, or nil (auto-detect) when Source = Auto.
-    private func dictationLanguage() -> Lang? {
-        settings.sourceLang == .auto ? nil : concrete(settings.sourceLang)
-    }
+    /// Whisper language: always nil = **auto-detect the spoken language**.
+    ///
+    /// Deliberately NOT tied to `settings.sourceLang`. That setting picks the *translation*
+    /// direction, not what you speak. Passing it to Whisper forces the language token, and a
+    /// forced token makes the model emit that language for ANY speech — i.e. it silently
+    /// translates. With the default Source = RU, dictating English produced Russian text.
+    /// Auto-detect keeps plain dictation (Fn) in whatever language you actually spoke.
+    private func dictationLanguage() -> Lang? { nil }
 
     /// Request microphone access without starting a recording (used by onboarding).
     func requestMicrophoneAccess(_ completion: @escaping (Bool) -> Void) {
