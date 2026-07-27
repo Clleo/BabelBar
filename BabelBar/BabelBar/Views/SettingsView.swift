@@ -226,7 +226,6 @@ struct SettingsView: View {
             }
         }
         .padding(20)
-        .glassPanel(corner: 16)
     }
 
     // MARK: - UPDATES
@@ -266,7 +265,6 @@ struct SettingsView: View {
                 .foregroundColor(Theme.textSecondary)
         }
         .padding(20)
-        .glassPanel(corner: 16)
     }
 
     /// Inline result of the last update check, shown next to the button.
@@ -362,7 +360,6 @@ struct SettingsView: View {
             }
         }
         .padding(20)
-        .glassPanel(corner: 16)
     }
 
     private var licenseField: some View {
@@ -502,7 +499,6 @@ struct SettingsView: View {
             }
         }
         .padding(20)
-        .glassPanel(corner: 16)
     }
 
     @ViewBuilder private var voiceRows: some View {
@@ -570,7 +566,6 @@ struct SettingsView: View {
             permissionRow(state.t(.permMic), icon: "mic", granted: Permissions.microphone(), kind: .microphone)
         }
         .padding(20)
-        .glassPanel(corner: 16)
         .id(permRefresh)
         .onAppear { permRefresh &+= 1 }
     }
@@ -598,7 +593,6 @@ struct SettingsView: View {
             ThemeEditorView(theme: state.theme, appearance: appearanceBinding)
         }
         .padding(20)
-        .glassPanel(corner: 16)
     }
 
     /// Sets the appearance AND re-skins synchronously, so the rebuild that follows reads the
@@ -680,7 +674,6 @@ struct SettingsView: View {
             }
         }
         .padding(20)
-        .glassPanel(corner: 16)
     }
 
     // MARK: - API SETTINGS
@@ -789,7 +782,6 @@ struct SettingsView: View {
             .padding(.top, 4)
         }
         .padding(20)
-        .glassPanel(corner: 16)
     }
 
     private var saveButton: some View {
@@ -997,7 +989,7 @@ struct SettingsWindowView: View {
                 .padding(.horizontal, 15)          // side frames like the main window
                 .padding(.top, 8).padding(.bottom, 6)   // top matches the gap below the header
         }
-        .frame(minWidth: 740, maxWidth: .infinity, minHeight: 340, maxHeight: .infinity)
+        .frame(minWidth: 740, maxWidth: .infinity, minHeight: 200, maxHeight: .infinity)
         .tooltipLayer()
         // Live recolor of the settings panels via the theme-revision environment (no rebuild,
         // so the open color-picker popover stays put).

@@ -458,27 +458,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// Settings window geometry: the width is fixed, the height follows the open section.
+    static let settingsWidth: CGFloat = 780
+    private static let settingsMinH: CGFloat = 200
+
     /// Resize the settings window vertically so the scroll viewport exactly fits the open
-    /// section's content. The resize is INSTANT (animate: false) on purpose: with an
-    /// animation, `win.frame` is a mid-flight value whenever a second fit lands (sections
-    /// whose content settles late), and any scheme based on it — deltas or cached chrome —
-    /// eventually locks in a wrong height. Instant resizes keep every measurement
-    /// consistent, so each fit self-corrects: delta = content − viewport of the same,
-    /// settled layout pass.
+    /// section's content.
+    ///
+    /// Two deliberate choices:
+    /// • INSTANT (animate: false) — during an animated resize `win.frame` is a mid-flight
+    ///   value, so a second fit landing then (sections whose content settles late) would
+    ///   read a bogus height. Instant keeps every measurement consistent, and each fit
+    ///   self-corrects: delta = content − viewport of one settled layout pass.
+    /// • minSize == maxSize == the new size — this is what actually blocks the user from
+    ///   dragging the window's edges (a borderless window still resizes by drag while
+    ///   `.resizable` is in the mask, and the mask has to stay for programmatic resizing).
+    ///   We widen the limits right before our own setFrame, so only we can change the size.
     private func fitSettingsWindow(contentH: CGFloat, viewportH: CGFloat) {
         guard let win = settingsWindow else { return }
-        let delta = contentH - viewportH
 
         let vf = (win.screen ?? currentScreen()).visibleFrame
         var frame = win.frame
-        var newH = frame.height + delta
+        var newH = frame.height + (contentH - viewportH)
         newH = min(newH, vf.height - 16)              // never taller than the screen
-        newH = max(newH, win.minSize.height)
+        newH = max(newH, Self.settingsMinH)
 
         let dh = newH - frame.height
         guard abs(dh) > 1 else { return }
+
+        let locked = NSSize(width: Self.settingsWidth, height: newH)
+        win.minSize = locked
+        win.maxSize = locked
         frame.origin.y -= dh                          // keep the top edge fixed
-        frame.size.height = newH
+        frame.size = locked
         if frame.minY < vf.minY + 8 { frame.origin.y = vf.minY + 8 }   // stay on screen
         win.setFrame(frame, display: true, animate: false)
     }
@@ -508,15 +520,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // SwiftUI content's ideal size (tiny for a ScrollView) and the content-height
         // auto-fit can't win, collapsing the window.
         let window = KeyableBorderlessWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 780, height: 680),
+            contentRect: NSRect(x: 0, y: 0, width: Self.settingsWidth, height: 680),
             styleMask: [.borderless, .fullSizeContentView, .resizable],
             backing: .buffered, defer: false
         )
         // Order matters: sizes first, then `settingsWindow`, then the content. The SwiftUI
         // first layout fires the content-height fit callback during `contentViewController =`;
         // it needs `settingsWindow` non-nil, and any setContentSize AFTER it would undo the fit.
-        window.minSize = NSSize(width: 740, height: 340)
-        window.setContentSize(NSSize(width: 780, height: 680))   // start size; auto-fit corrects it
+        // Open limits for the very first fit; from then on fitSettingsWindow pins
+        // minSize == maxSize to the content height (that's what blocks user drags).
+        window.minSize = NSSize(width: Self.settingsWidth, height: Self.settingsMinH)
+        window.maxSize = NSSize(width: Self.settingsWidth, height: 20_000)
+        window.setContentSize(NSSize(width: Self.settingsWidth, height: 680))   // auto-fit corrects it
         settingsWindow = window
         window.contentViewController = container
         window.isMovableByWindowBackground = true
