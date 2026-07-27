@@ -87,6 +87,10 @@ struct SettingsView: View {
                         })
                     }
                     .scrollIndicators(.never)
+                    // The viewport itself is a full-height dark panel: without it, whenever the
+                    // window is taller than the section (min height, manual resize), the area
+                    // below the cards showed the bare window blur instead of staying dark.
+                    .glassPanel(corner: 16)
                     .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))   // rounded scroll viewport
                     .id(section)   // fresh scroll position when switching sections
                     .background(GeometryReader { g in
