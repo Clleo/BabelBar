@@ -90,7 +90,8 @@ struct SettingsView: View {
                     // The viewport itself is a full-height dark panel: without it, whenever the
                     // window is taller than the section (min height, manual resize), the area
                     // below the cards showed the bare window blur instead of staying dark.
-                    .glassPanel(corner: 16)
+                    // Unstroked: a border here would double the cards' own and read as a line.
+                    .glassPanel(corner: 16, stroked: false)
                     .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))   // rounded scroll viewport
                     .id(section)   // fresh scroll position when switching sections
                     .background(GeometryReader { g in
@@ -1000,12 +1001,6 @@ struct SettingsWindowView: View {
         }
         .frame(minWidth: 740, maxWidth: .infinity, minHeight: 340, maxHeight: .infinity)
         .tooltipLayer()
-        // Bottom-right resize affordance — drag it to grow/shrink the settings window.
-        .overlay(alignment: .bottomTrailing) {
-            WindowResizeGrip()
-                .frame(width: 16, height: 16)
-                .padding(5)
-        }
         // Live recolor of the settings panels via the theme-revision environment (no rebuild,
         // so the open color-picker popover stays put).
         .environment(\.themeRevision, theme.revision)

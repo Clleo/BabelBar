@@ -48,9 +48,11 @@ extension EnvironmentValues {
     }
 }
 
-/// Reusable rounded glass panel.
+/// Reusable rounded glass panel. `stroked: false` gives just the fill — for large backdrop
+/// surfaces where the hairline border would read as a stray line.
 struct GlassPanel: ViewModifier {
     var corner: CGFloat = 16
+    var stroked: Bool = true
     @Environment(\.themeRevision) private var revision   // forces re-eval on theme change
 
     func body(content: Content) -> some View {
@@ -62,14 +64,14 @@ struct GlassPanel: ViewModifier {
             )
             .overlay(
                 RoundedRectangle(cornerRadius: corner, style: .continuous)
-                    .stroke(Theme.panelStroke, lineWidth: 1)
+                    .stroke(Theme.panelStroke, lineWidth: stroked ? 1 : 0)
             )
     }
 }
 
 extension View {
-    func glassPanel(corner: CGFloat = 16) -> some View {
-        modifier(GlassPanel(corner: corner))
+    func glassPanel(corner: CGFloat = 16, stroked: Bool = true) -> some View {
+        modifier(GlassPanel(corner: corner, stroked: stroked))
     }
 }
 

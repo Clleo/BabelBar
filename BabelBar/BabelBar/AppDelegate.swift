@@ -505,10 +505,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let container = BlurContainerViewController(content: hosting, radius: 16,
                                                     tracksPreferredSize: false)
 
-        // Borderless (no titlebar dead zone); draggable by background; resizable from a corner.
+        // Borderless (no titlebar dead zone); draggable by background. NOT user-resizable:
+        // the height is driven by the open section's content (auto-fit), so a manual resize
+        // would only fight it and leave dead space.
         let window = KeyableBorderlessWindow(
             contentRect: NSRect(x: 0, y: 0, width: 780, height: 680),
-            styleMask: [.borderless, .fullSizeContentView, .resizable],
+            styleMask: [.borderless, .fullSizeContentView],
             backing: .buffered, defer: false
         )
         // Order matters: sizes first, then `settingsWindow`, then the content. The SwiftUI
