@@ -24,11 +24,13 @@ enum LKey: String {
     // Header / sections
     case settingsTitle
     case secLicense, secApp, secVoice, secPermissions, secAPI, secTheme, secUpdates
+    case secGeneral, secAbout
     // App settings
     case launchAtLogin, showMenuBarIcon, openBabelBar, translateAuto, translateScreenshot
     // Updates
     case autoCheckUpdates, checkForUpdatesNow, checkingUpdates, lastChecked, neverChecked
     case updateUpToDate, updateAvailableFmt, updateFailed, updateDownload
+    case updateInstallNow, updateInstalling
     // GitHub star card
     case githubStar, recentlyStarred, starsWord
     case languagePreferences, interfaceLanguage, source, target, autoDetect
@@ -48,7 +50,7 @@ enum LKey: String {
     case clear, voiceInputTip, forQuickCopy, insertTranslation
     case recordKeys, recordModifiers
     // Errors & status-bar menu
-    case errMicSpeech, menuShow, menuSettings, menuQuit
+    case errMicSpeech, errDictation, errTranslationOriginal, menuShow, menuSettings, menuQuit
     // Speech engine section
     case secSpeech, recognition, engineLocal, engineRemote
     case download, downloading, modelReady, downloaded, initializing, insertion, insertPaste, insertType
@@ -98,6 +100,8 @@ enum Loc {
                    "Réglages API", "Impostazioni API", "Configurações da API"),
         .secTheme: r("Theme", "Тема", "Design", "Tema", "Thème", "Tema", "Tema"),
         .secUpdates: r("Updates", "Обновления", "Updates", "Actualizaciones", "Mises à jour", "Aggiornamenti", "Atualizações"),
+        .secGeneral: r("General", "Общее", "Allgemein", "General", "Général", "Generali", "Geral"),
+        .secAbout: r("About", "О приложении", "Über", "Acerca de", "À propos", "Informazioni", "Sobre"),
 
         // App settings — menu bar
         .showMenuBarIcon: r("Show menu bar icon", "Показывать значок в строке меню", "Symbol in der Menüleiste anzeigen",
@@ -126,6 +130,10 @@ enum Loc {
                         "Échec de la recherche de mises à jour", "Impossibile controllare gli aggiornamenti",
                         "Não foi possível verificar atualizações"),
         .updateDownload: r("Download", "Скачать", "Herunterladen", "Descargar", "Télécharger", "Scarica", "Baixar"),
+        .updateInstallNow: r("Install Update", "Установить обновление", "Update installieren", "Instalar actualización",
+                            "Installer la mise à jour", "Installa aggiornamento", "Instalar atualização"),
+        .updateInstalling: r("Installing…", "Установка…", "Installation läuft…", "Instalando…",
+                            "Installation…", "Installazione…", "Instalando…"),
 
         // GitHub star card
         .githubStar: r("Star", "В избранное", "Star", "Estrella", "Star", "Star", "Star"),
@@ -250,6 +258,20 @@ enum Loc {
                         "L’autorisation Microphone est requise.",
                         "È richiesto il permesso Microfono.",
                         "É necessária a permissão de Microfone."),
+        .errDictation: r("Dictation failed",
+                        "Ошибка диктовки",
+                        "Diktat fehlgeschlagen",
+                        "Error de dictado",
+                        "Échec de la dictée",
+                        "Dettatura non riuscita",
+                        "Falha no ditado"),
+        .errTranslationOriginal: r("Translation failed — inserted original",
+                        "Перевод не удался — вставлен оригинал",
+                        "Übersetzung fehlgeschlagen — Original eingefügt",
+                        "Error de traducción: se insertó el original",
+                        "Échec de la traduction — original inséré",
+                        "Traduzione non riuscita — inserito l’originale",
+                        "Falha na tradução — original inserido"),
         .menuShow: r("Show BabelBar", "Показать BabelBar", "BabelBar anzeigen", "Mostrar BabelBar",
                     "Afficher BabelBar", "Mostra BabelBar", "Mostrar o BabelBar"),
         .menuSettings: r("Settings…", "Настройки…", "Einstellungen…", "Ajustes…", "Réglages…", "Impostazioni…", "Configurações…"),

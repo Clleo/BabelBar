@@ -35,6 +35,11 @@ struct ProviderConfig {
 /// Works with OpenAI, DeepSeek, and any compatible provider.
 struct TranslationService {
 
+    /// Hard per-request timeout. Without it the platform default is 60 s, and with two
+    /// configured accounts a dead connection meant up to 2 minutes of spinner. 20 s is
+    /// enough for slow LLM providers on short dictation-sized texts.
+    var timeout: TimeInterval = 20
+
     /// Tries the given accounts in order (starting at `startIndex`, wrapping once). The first
     /// one that succeeds wins; on failure (e.g. exhausted balance / auth) it falls back to the
     /// next configured account. Returns the result and which slot served it.
@@ -86,6 +91,7 @@ struct TranslationService {
 
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
+        req.timeoutInterval = timeout
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
         req.httpBody = try JSONSerialization.data(withJSONObject: body)

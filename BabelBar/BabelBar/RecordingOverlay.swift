@@ -18,6 +18,9 @@ final class MicLevel: ObservableObject {
     @Published var showDot = true
     /// True when there's no internet connection — the record dot turns red instead of green.
     @Published var isOffline = false
+    /// Short error text shown in the pill (replaces the waveform) after a failed
+    /// dictation/translation, so failures are visible even while the app window is hidden.
+    @Published var errorText: String?
 
     private let networkMonitor = NWPathMonitor()
 
@@ -55,6 +58,9 @@ final class RecordingOverlay {
     private var processingDelay: DispatchWorkItem?       // pending "show loader" work
     private let processingShowDelay: TimeInterval = 0.8  // only show the loader if waiting > this
 
+    private var errorHideDelay: DispatchWorkItem?        // pending auto-hide of an error pill
+    private let errorShowDuration: TimeInterval = 3.0
+
     /// Switch the left indicator between the record dot and a loader. Turning it ON is delayed
     /// by `processingShowDelay` so quick results never flash a spinner; turning it OFF is immediate
     /// and cancels any pending show.
@@ -72,8 +78,23 @@ final class RecordingOverlay {
         }
     }
 
+    /// Show a short error message in the pill for a few seconds, then hide it.
+    /// Used by the cursor-dictation flows: their errors would otherwise land in the
+    /// (hidden) app window and the user would see the pill silently vanish.
+    func showError(_ text: String) {
+        DispatchQueue.main.async {
+            self.show()                            // (re)present the pill; clears stale state
+            MicLevel.shared.errorText = text
+            let work = DispatchWorkItem { [weak self] in self?.hide() }
+            self.errorHideDelay = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + self.errorShowDuration, execute: work)
+        }
+    }
+
     func show() {
         processingDelay?.cancel(); processingDelay = nil
+        errorHideDelay?.cancel(); errorHideDelay = nil
+        MicLevel.shared.errorText = nil
         MicLevel.shared.processing = false        // fresh recording → red dot, not loader
         let screen = currentScreen()
         let panel = self.panel ?? makePanel()
@@ -93,8 +114,10 @@ final class RecordingOverlay {
 
     func hide() {
         processingDelay?.cancel(); processingDelay = nil
+        errorHideDelay?.cancel(); errorHideDelay = nil
         MicLevel.shared.reset()
         MicLevel.shared.processing = false
+        MicLevel.shared.errorText = nil
         guard let panel else { return }
         let screen = panel.screen ?? currentScreen()
         var hidden = panel.frame
@@ -181,20 +204,40 @@ private struct WaveformOverlayView: View {
         // per-frame redraw here used to stall the run loop and let global Fn leak out).
         TimelineView(.periodic(from: .now, by: 1.0 / 24.0)) { timeline in
             let t = timeline.date.timeIntervalSinceReferenceDate
-            ZStack {
-                // Waveform stays centered (symmetric insets) — independent of the indicator.
-                waveform(t)
-                    .padding(.horizontal, stripInset)
+            if let err = mic.errorText {
+                errorLabel(err)
+            } else {
+                ZStack {
+                    // Waveform stays centered (symmetric insets) — independent of the indicator.
+                    waveform(t)
+                        .padding(.horizontal, stripInset)
 
-                // Indicator (dot / loader) anchored in the left corner, vertically centered.
-                HStack {
-                    leftIndicator(t)
-                        .frame(width: 17, height: 17)
-                    Spacer()
+                    // Indicator (dot / loader) anchored in the left corner, vertically centered.
+                    HStack {
+                        leftIndicator(t)
+                            .frame(width: 17, height: 17)
+                        Spacer()
+                    }
+                    .padding(.leading, 6)
                 }
-                .padding(.leading, 6)
             }
         }
+    }
+
+    /// Error state: small red dot + one-line message in place of the waveform.
+    private func errorLabel(_ text: String) -> some View {
+        HStack(spacing: 6) {
+            Circle()
+                .fill(Color(red: 0.96, green: 0.42, blue: 0.54))
+                .frame(width: 7, height: 7)
+            Text(text)
+                .font(.system(size: 10.5, weight: .medium))
+                .foregroundColor(.white.opacity(0.92))
+                .lineLimit(1)
+                .truncationMode(.tail)
+        }
+        .padding(.horizontal, 10)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private func waveform(_ t: TimeInterval) -> some View {

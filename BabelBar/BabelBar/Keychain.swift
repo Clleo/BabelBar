@@ -14,7 +14,10 @@ enum Keychain {
     static let license = "license"
 
     /// Store (or, for an empty value, remove) a secret.
+    /// No-op when the stored value is already identical — SettingsStore saves on every
+    /// translation (token counter), and a keychain write per translation is wasted work.
     static func set(_ value: String, for account: String) {
+        guard get(account) != value else { return }
         let base: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,

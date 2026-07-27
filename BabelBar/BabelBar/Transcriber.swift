@@ -191,8 +191,17 @@ final class DictationEngine {
             do {
                 let text: String
                 switch engine {
-                case .remote: text = try await remote.transcribe(samples: samples, language: language)
-                case .local:  text = try await localT.transcribe(samples: samples, language: language)
+                case .remote:
+                    do {
+                        text = try await remote.transcribe(samples: samples, language: language)
+                    } catch {
+                        // Weak/no connection (or a bad key): fall back to the local model,
+                        // but only when it's already on disk — never auto-download here.
+                        guard WhisperModelManager.isVariantOnDisk(settings.whisperModel.variant) else { throw error }
+                        text = try await localT.transcribe(samples: samples, language: language)
+                    }
+                case .local:
+                    text = try await localT.transcribe(samples: samples, language: language)
                 }
                 await MainActor.run { self.isTranscribing = false; completion(.success(text)) }
             } catch {
@@ -255,16 +264,23 @@ final class WhisperModelManager: ObservableObject {
             atPath: url.appendingPathComponent("AudioEncoder.mlmodelc").path)
     }
 
+    /// Find a fully-downloaded model folder for this variant on disk. Matches only the real
+    /// CoreML directory (encoder present, not `.cache/` staging) so tokenizer-only and
+    /// partial folders are never returned. Nonisolated so non-MainActor callers can use it.
+    nonisolated static func findModelFolder(variant: String) -> URL? {
+        let fm = FileManager.default
+        guard let en = fm.enumerator(at: WhisperPaths.modelsDir,
+                                     includingPropertiesForKeys: [.isDirectoryKey]) else { return nil }
+        for case let url as URL in en where isValidModelFolder(url, variant: variant) {
+            return url
+        }
+        return nil
+    }
+
     /// Nonisolated disk check so non-MainActor callers (AppState) can gate prewarming
     /// without auto-triggering a download.
     nonisolated static func isVariantOnDisk(_ variant: String) -> Bool {
-        let fm = FileManager.default
-        guard let en = fm.enumerator(at: WhisperPaths.modelsDir,
-                                     includingPropertiesForKeys: [.isDirectoryKey]) else { return false }
-        for case let url as URL in en where isValidModelFolder(url, variant: variant) {
-            return true
-        }
-        return false
+        findModelFolder(variant: variant) != nil
     }
 
     private init() {
@@ -370,17 +386,8 @@ final class WhisperModelManager: ObservableObject {
 
     private func persist() { UserDefaults.standard.set(folders, forKey: key) }
 
-    /// Find a fully-downloaded model folder for this variant. Matches only the real CoreML
-    /// directory (encoder present, not `.cache/` staging) so tokenizer-only and partial folders
-    /// are never returned.
     private func scan(for variant: String) -> URL? {
-        let fm = FileManager.default
-        guard let en = fm.enumerator(at: WhisperPaths.modelsDir,
-                                     includingPropertiesForKeys: [.isDirectoryKey]) else { return nil }
-        for case let url as URL in en where Self.isValidModelFolder(url, variant: variant) {
-            return url
-        }
-        return nil
+        Self.findModelFolder(variant: variant)
     }
 
     static func folderSize(_ url: URL) -> Int64 {

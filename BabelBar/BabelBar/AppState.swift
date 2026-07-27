@@ -190,6 +190,9 @@ final class AppState: ObservableObject {
     var onCloseSettings: (() -> Void)?
     /// Show/hide the menu-bar status item (wired by AppDelegate).
     var onMenuBarVisibilityChanged: ((Bool) -> Void)?
+    /// Resize the settings window so its scroll viewport fits the section content
+    /// (contentHeight, viewportHeight). Wired by AppDelegate.
+    var onSettingsFitContent: ((CGFloat, CGFloat) -> Void)?
 
     private let translator = TranslationService()
 
@@ -277,14 +280,7 @@ final class AppState: ObservableObject {
                 )
                 await MainActor.run {
                     if reverse { self.inputText = result.text } else { self.outputText = result.text }
-                    // Stick to whichever account actually served the request (failover).
-                    if self.settings.activeSlot != result.usedSlot {
-                        self.settings.activeSlot = result.usedSlot
-                    }
-                    if result.totalTokens > 0 {
-                        self.settings.tokensUsed += result.totalTokens
-                    }
-                    SettingsStore.save(self.settings)
+                    self.applyTranslationResult(result)
                     self.isTranslating = false
                 }
             } catch {
@@ -294,6 +290,14 @@ final class AppState: ObservableObject {
                 }
             }
         }
+    }
+
+    /// Post-translation bookkeeping shared by every translation flow: stick to the account
+    /// that actually served the request (failover), count tokens, persist. Main thread only.
+    private func applyTranslationResult(_ result: TranslationResult) {
+        if settings.activeSlot != result.usedSlot { settings.activeSlot = result.usedSlot }
+        if result.totalTokens > 0 { settings.tokensUsed += result.totalTokens }
+        SettingsStore.save(settings)
     }
 
     /// Pick (from, to) for the given text, honoring the user's Source/Target preferences.
@@ -394,7 +398,9 @@ final class AppState: ObservableObject {
 
     // MARK: - Global voice shortcuts (dictate at cursor / voice→translate)
 
-    func startCursorDictation() {
+    /// Shared capture start for both cursor shortcuts (Fn and Shift+Fn) — the recording
+    /// phase is identical; only the stop handlers differ.
+    private func beginCursorCapture() {
         dictationEngine.requestMic { [weak self] ok in
             guard let self else { return }
             guard ok else { self.errorMessage = self.t(.errMicSpeech); return }
@@ -406,40 +412,32 @@ final class AppState: ObservableObject {
             } catch { self.errorMessage = error.localizedDescription }
         }
     }
+
+    func startCursorDictation() { beginCursorCapture() }
 
     func stopCursorDictation() {
         // Overlay stays up through transcription (showing a loader), then we insert at the cursor.
         RecordingOverlay.shared.setProcessing(true)
         dictationEngine.finish(settings: settings, language: dictationLanguage()) { [weak self] result in
             guard let self else { return }
-            RecordingOverlay.shared.hide()
             switch result {
             case .success(let text) where !text.isEmpty:
+                RecordingOverlay.shared.hide()
                 TextInserter.insert(text, method: self.settings.insertMethod)
             case .failure(let e):
+                // The app window is hidden during cursor dictation — surface the failure
+                // in the pill itself, or the user just sees the overlay silently vanish.
                 self.errorMessage = e.localizedDescription
+                RecordingOverlay.shared.showError(self.t(.errDictation))
             default:
-                break
+                RecordingOverlay.shared.hide()
             }
         }
     }
 
     // MARK: - Global voice→translate→insert (Shift+Fn)
 
-    /// Start dictation for the "speak → translate → type at cursor" shortcut.
-    /// Identical capture to `startCursorDictation`; only the stop handler differs (it translates).
-    func startCursorTranslateDictation() {
-        dictationEngine.requestMic { [weak self] ok in
-            guard let self else { return }
-            guard ok else { self.errorMessage = self.t(.errMicSpeech); return }
-            do {
-                try self.dictationEngine.start(duckAudio: self.settings.duckAudio)
-                self.playTriggerSound()
-                MicLevel.shared.showDot = self.settings.showRecordingDot
-                RecordingOverlay.shared.show()
-            } catch { self.errorMessage = error.localizedDescription }
-        }
-    }
+    func startCursorTranslateDictation() { beginCursorCapture() }
 
     /// Stop recording, transcribe, translate to the configured language in the background,
     /// then type the translation at the cursor. The overlay stays up (loader) until the
@@ -452,8 +450,8 @@ final class AppState: ObservableObject {
             case .success(let text) where !text.isEmpty:
                 self.translateForCursor(text)        // keeps the overlay up until the result is typed
             case .failure(let e):
-                RecordingOverlay.shared.hide()
                 self.errorMessage = e.localizedDescription
+                RecordingOverlay.shared.showError(self.t(.errDictation))
             default:
                 RecordingOverlay.shared.hide()
             }
@@ -474,15 +472,16 @@ final class AppState: ObservableObject {
                 )
                 await MainActor.run {
                     RecordingOverlay.shared.hide()
-                    if self.settings.activeSlot != result.usedSlot { self.settings.activeSlot = result.usedSlot }
-                    if result.totalTokens > 0 { self.settings.tokensUsed += result.totalTokens }
-                    SettingsStore.save(self.settings)
+                    self.applyTranslationResult(result)
                     TextInserter.insert(result.text, method: self.settings.insertMethod)
                 }
             } catch {
                 await MainActor.run {
-                    RecordingOverlay.shared.hide()
+                    // Translation failed (offline / provider down) — don't throw the user's
+                    // words away: insert the raw transcript and say what happened.
                     self.errorMessage = error.localizedDescription
+                    TextInserter.insert(text, method: self.settings.insertMethod)
+                    RecordingOverlay.shared.showError(self.t(.errTranslationOriginal))
                 }
             }
         }
@@ -590,12 +589,15 @@ final class AppState: ObservableObject {
     /// Avatar URLs of a few stargazers, shown in the card.
     @Published var stargazerAvatars: [URL] = []
 
-    /// Result of the latest update check.
+    /// Result of the latest update check / progress of an in-app update install.
     enum UpdateState: Equatable {
         case idle
         case checking
         case upToDate
-        case available(version: String, url: URL)
+        /// `asset` = direct DMG download URL (nil → fall back to opening the release page).
+        case available(version: String, url: URL, asset: URL?)
+        case downloading(version: String, progress: Double)
+        case installing
         case failed
     }
     @Published var updateState: UpdateState = .idle
@@ -627,7 +629,10 @@ final class AppState: ObservableObject {
 
     /// Query the latest GitHub release and compare it with the running version.
     func checkForUpdates() {
-        guard updateState != .checking else { return }
+        switch updateState {
+        case .checking, .downloading, .installing: return   // an update is already in flight
+        default: break
+        }
         updateState = .checking
         let api = "https://api.github.com/repos/\(Self.repoOwner)/\(Self.repoName)/releases/latest"
         guard let url = URL(string: api) else { updateState = .failed; return }
@@ -650,12 +655,110 @@ final class AppState: ObservableObject {
                 }
                 let latest = tag.trimmingCharacters(in: CharacterSet(charactersIn: "vV "))
                 if Self.isVersion(latest, newerThan: self.appVersion) {
-                    self.updateState = .available(version: latest, url: htmlURL)
+                    // Direct DMG asset of the release (enables in-app install).
+                    let assets = json["assets"] as? [[String: Any]] ?? []
+                    let dmg = assets
+                        .compactMap { $0["browser_download_url"] as? String }
+                        .first { $0.hasSuffix(".dmg") }
+                        .flatMap(URL.init)
+                    self.updateState = .available(version: latest, url: htmlURL, asset: dmg)
                 } else {
                     self.updateState = .upToDate
                 }
             }
         }.resume()
+    }
+
+    // MARK: - In-app update install (download DMG → mount → replace .app → relaunch)
+
+    enum UpdateError: Error { case appNotFoundInDMG, commandFailed }
+
+    /// Download the release DMG and install it over the running app, then relaunch.
+    /// No DMG asset in the release → just open the release page in the browser.
+    func installUpdate() {
+        guard case let .available(version, page, asset) = updateState else { return }
+        guard let asset else { NSWorkspace.shared.open(page); return }
+        updateState = .downloading(version: version, progress: 0)
+
+        Task.detached(priority: .userInitiated) {
+            do {
+                let dmg = try await self.downloadDMG(from: asset, version: version)
+                await MainActor.run { self.updateState = .installing }
+                try Self.installDMG(dmg)   // terminates + relaunches on success
+            } catch {
+                await MainActor.run { self.updateState = .failed }
+            }
+        }
+    }
+
+    /// Stream the DMG to a temp file, reporting progress to the UI.
+    private func downloadDMG(from url: URL, version: String) async throws -> URL {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("BabelBarUpdate", isDirectory: true)
+        try? FileManager.default.removeItem(at: dir)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let dest = dir.appendingPathComponent("BabelBar-\(version).dmg")
+
+        let (bytes, response) = try await URLSession.shared.bytes(from: url)
+        let total = response.expectedContentLength
+        var data = Data(capacity: total > 0 ? Int(total) : 8_000_000)
+        var lastReport = Date.distantPast
+        for try await byte in bytes {
+            data.append(byte)
+            if total > 0, Date().timeIntervalSince(lastReport) > 0.15 {
+                lastReport = Date()
+                let p = Double(data.count) / Double(total)
+                await MainActor.run { self.updateState = .downloading(version: version, progress: p) }
+            }
+        }
+        try data.write(to: dest)
+        return dest
+    }
+
+    /// Mount the DMG, replace the installed app with the new one (keeping a rollback copy
+    /// until the copy succeeds), unmount, then relaunch the new build and quit this one.
+    private static func installDMG(_ dmg: URL) throws {
+        let fm = FileManager.default
+        let mount = fm.temporaryDirectory.appendingPathComponent("BabelBarMount-\(UUID().uuidString)")
+        try run("/usr/bin/hdiutil", ["attach", dmg.path, "-nobrowse", "-readonly",
+                                     "-mountpoint", mount.path])
+        defer { try? run("/usr/bin/hdiutil", ["detach", mount.path, "-force"]) }
+
+        let newApp = mount.appendingPathComponent("BabelBar.app")
+        guard fm.fileExists(atPath: newApp.path) else { throw UpdateError.appNotFoundInDMG }
+
+        // Install over the running copy. If macOS translocated us (launched straight from a
+        // DMG), the bundle path is a random read-only mount — install to /Applications instead.
+        var dest = Bundle.main.bundleURL
+        if dest.path.contains("/AppTranslocation/") {
+            dest = URL(fileURLWithPath: "/Applications/BabelBar.app")
+        }
+
+        let backup = fm.temporaryDirectory.appendingPathComponent("BabelBar-old-\(UUID().uuidString).app")
+        if fm.fileExists(atPath: dest.path) { try fm.moveItem(at: dest, to: backup) }
+        do {
+            try run("/usr/bin/ditto", [newApp.path, dest.path])   // ditto preserves the signature
+        } catch {
+            if fm.fileExists(atPath: backup.path) { try? fm.moveItem(at: backup, to: dest) }
+            throw error
+        }
+        try? fm.removeItem(at: backup)
+
+        // Relaunch the new build after this process exits.
+        let relaunch = Process()
+        relaunch.executableURL = URL(fileURLWithPath: "/bin/sh")
+        relaunch.arguments = ["-c", "sleep 0.7; /usr/bin/open \"\(dest.path)\""]
+        try? relaunch.run()
+        DispatchQueue.main.async { NSApp.terminate(nil) }
+    }
+
+    private static func run(_ tool: String, _ args: [String]) throws {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: tool)
+        p.arguments = args
+        try p.run()
+        p.waitUntilExit()
+        guard p.terminationStatus == 0 else { throw UpdateError.commandFailed }
     }
 
     /// Numeric dot-separated version comparison ("1.2" vs "1.10"), missing fields treated as 0.

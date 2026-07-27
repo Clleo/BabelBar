@@ -92,6 +92,7 @@ enum WAVEncoder {
         let dataSize = samples.count * 2
 
         var d = Data()
+        d.reserveCapacity(44 + dataSize)   // header + samples, avoids repeated reallocs on long clips
         func u32(_ v: UInt32) { var x = v.littleEndian; withUnsafeBytes(of: &x) { d.append(contentsOf: $0) } }
         func u16(_ v: UInt16) { var x = v.littleEndian; withUnsafeBytes(of: &x) { d.append(contentsOf: $0) } }
         func tag(_ s: String) { d.append(contentsOf: s.utf8) }

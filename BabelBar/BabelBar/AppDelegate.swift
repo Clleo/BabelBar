@@ -458,7 +458,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// Resize the settings window vertically so the scroll viewport exactly fits the open
+    /// section's content. Top edge stays put (grows/shrinks downward); height is clamped
+    /// to the screen and the window's minimum. Width is untouched.
+    private func fitSettingsWindow(contentH: CGFloat, viewportH: CGFloat) {
+        guard let win = settingsWindow else { return }
+        let delta = contentH - viewportH
+        guard abs(delta) > 1 else { return }
+
+        let vf = (win.screen ?? currentScreen()).visibleFrame
+        var frame = win.frame
+        var newH = frame.height + delta
+        newH = min(newH, vf.height - 16)              // never taller than the screen
+        newH = max(newH, win.minSize.height)
+        let dh = newH - frame.height
+        guard abs(dh) > 1 else { return }
+
+        frame.origin.y -= dh                          // keep the top edge fixed
+        frame.size.height = newH
+        if frame.minY < vf.minY + 8 { frame.origin.y = vf.minY + 8 }   // stay on screen
+        win.setFrame(frame, display: true, animate: true)
+    }
+
     func showSettings() {
+        appState.onSettingsFitContent = { [weak self] content, viewport in
+            self?.fitSettingsWindow(contentH: content, viewportH: viewport)
+        }
         if let win = settingsWindow {
             positionSettings(win)                 // open on/near the app window
             win.makeKeyAndOrderFront(nil)
@@ -476,13 +501,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Borderless (no titlebar dead zone); draggable by background; resizable from a corner.
         let window = KeyableBorderlessWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 600, height: 680),
+            contentRect: NSRect(x: 0, y: 0, width: 780, height: 680),
             styleMask: [.borderless, .fullSizeContentView, .resizable],
             backing: .buffered, defer: false
         )
+        // Order matters: sizes first, then `settingsWindow`, then the content. The SwiftUI
+        // first layout fires the content-height fit callback during `contentViewController =`;
+        // it needs `settingsWindow` non-nil, and any setContentSize AFTER it would undo the fit.
+        window.minSize = NSSize(width: 740, height: 340)
+        window.setContentSize(NSSize(width: 780, height: 680))   // start size; auto-fit corrects it
+        settingsWindow = window
         window.contentViewController = container
-        window.minSize = NSSize(width: 560, height: 420)
-        window.setContentSize(NSSize(width: 600, height: 680))   // default size, resizable after
         window.isMovableByWindowBackground = true
         window.backgroundColor = .clear
         window.isOpaque = false
@@ -491,7 +520,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         window.appearance = nsAppearance(appState.theme.currentIsDark)
         container.view.appearance = nsAppearance(appState.theme.currentIsDark)
         window.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
-        settingsWindow = window
         enableBackdropHosting(window)
         positionSettings(window)
         applyChrome()

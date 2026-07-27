@@ -1,9 +1,56 @@
 import SwiftUI
 import AppKit
 
+/// Sidebar sections of the settings window. Order here = order in the sidebar.
+enum SettingsSection: CaseIterable {
+    case general, voice, api, theme, permissions, about
+
+    var icon: String {
+        switch self {
+        case .general:     return "gearshape.fill"
+        case .voice:       return "mic.fill"
+        case .api:         return "network"
+        case .theme:       return "paintpalette.fill"
+        case .permissions: return "lock.shield.fill"
+        case .about:       return "info.circle.fill"
+        }
+    }
+
+    var titleKey: LKey {
+        switch self {
+        case .general:     return .secGeneral
+        case .voice:       return .secVoice
+        case .api:         return .secAPI
+        case .theme:       return .secTheme
+        case .permissions: return .secPermissions
+        case .about:       return .secAbout
+        }
+    }
+}
+
+/// Height of the selected section's cards inside the scroll view.
+private struct SettingsContentHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
+}
+
+/// Height of the scroll viewport itself (the visible area).
+private struct SettingsViewportHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
+}
+
 struct SettingsView: View {
     @EnvironmentObject var state: AppState
+    @State private var section: SettingsSection = .general
     @State private var showSecondaryProvider = false
+
+    // Window height auto-fit: the window resizes to the open section's content height.
+    // Fit fires when the CONTENT height changes (section switch, disclosure expand) — not
+    // when the viewport changes, so the user can still resize the window by hand.
+    @State private var contentH: CGFloat = 0
+    @State private var viewportH: CGFloat = 0
+    @State private var didInitialFit = false
     @State private var permRefresh = 0   // bump to re-read permission states
     @State private var keyField = ""
     @ObservedObject private var models = WhisperModelManager.shared
@@ -22,27 +69,43 @@ struct SettingsView: View {
         VStack(spacing: 0) {
             // Fixed header — content scrolls beneath it.
             header
-                .padding(.bottom, 6)
+                .padding(.bottom, 10)
 
-            ScrollView(.vertical) {
-                VStack(alignment: .leading, spacing: 15) {
-                    githubCard
-                    licenseSettings
-                    appSettings
-                    updatesSettings
-                    permissionsSettings
-                    voiceSettings
-                    apiSettings
-                    themeSettings
+            // Sidebar (section switcher) + the right column (cards + Save footer).
+            // The footer lives INSIDE the right column so the sidebar stays clear of it.
+            HStack(alignment: .top, spacing: 14) {
+                sidebar
+
+                VStack(spacing: 0) {
+                    ScrollView(.vertical) {
+                        VStack(alignment: .leading, spacing: 15) {
+                            sectionContent
+                        }
+                        .padding(.vertical, 2)   // tiny inset so the rounded clip doesn't crop cards
+                        .background(GeometryReader { g in
+                            Color.clear.preference(key: SettingsContentHeightKey.self, value: g.size.height)
+                        })
+                    }
+                    .scrollIndicators(.never)
+                    .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))   // rounded scroll viewport
+                    .id(section)   // fresh scroll position when switching sections
+                    .background(GeometryReader { g in
+                        Color.clear.preference(key: SettingsViewportHeightKey.self, value: g.size.height)
+                    })
+
+                    // Fixed footer — visible regardless of scroll position, right column only.
+                    saveButton
+                        .padding(.top, 14)
                 }
-                .padding(.vertical, 2)   // tiny inset so the rounded clip doesn't crop cards
             }
-            .scrollIndicators(.never)
-            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))   // rounded scroll viewport
-
-            // Fixed footer — the Save button stays visible regardless of scroll position.
-            saveButton
-                .padding(.top, 14)
+        }
+        .onPreferenceChange(SettingsContentHeightKey.self) { h in
+            contentH = h
+            fitWindow()
+        }
+        .onPreferenceChange(SettingsViewportHeightKey.self) { h in
+            viewportH = h
+            if !didInitialFit { fitWindow() }   // first layout: shrink the default frame to fit
         }
         .onAppear {
             if !state.settings.apiKey2.trimmingCharacters(in: .whitespaces).isEmpty {
@@ -62,6 +125,41 @@ struct SettingsView: View {
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             permRefresh &+= 1
         }
+    }
+
+    /// Ask the window to grow/shrink so the viewport exactly fits the section's content.
+    private func fitWindow() {
+        guard contentH > 0, viewportH > 0 else { return }
+        didInitialFit = true
+        state.onSettingsFitContent?(contentH, viewportH)
+    }
+
+    // MARK: - Sidebar / section switching
+
+    /// Cards shown for the selected sidebar section.
+    @ViewBuilder private var sectionContent: some View {
+        switch section {
+        case .general:     appSettings
+        case .voice:       voiceSettings
+        case .api:         apiSettings
+        case .theme:       themeSettings
+        case .permissions: permissionsSettings
+        case .about:
+            githubCard
+            licenseSettings
+            updatesSettings
+        }
+    }
+
+    private var sidebar: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            ForEach(SettingsSection.allCases, id: \.self) { s in
+                SidebarItem(title: state.t(s.titleKey), icon: s.icon,
+                            selected: section == s) { section = s }
+            }
+            Spacer(minLength: 0)
+        }
+        .frame(width: 168)
     }
 
     // MARK: - GITHUB STAR CARD
@@ -143,11 +241,17 @@ struct SettingsView: View {
 
             HStack(spacing: 12) {
                 let checking = state.updateState == .checking
+                let busy: Bool = {
+                    switch state.updateState {
+                    case .checking, .downloading, .installing: return true
+                    default: return false
+                    }
+                }()
                 GlassButton(
                     title: checking ? state.t(.checkingUpdates) : state.t(.checkForUpdatesNow),
                     busy: checking
                 ) { state.checkForUpdates() }
-                .disabled(checking)
+                .disabled(busy)
 
                 updateStatus
 
@@ -172,13 +276,27 @@ struct SettingsView: View {
                     .foregroundColor(Theme.accentGreen)
                 Text(state.t(.updateUpToDate)).font(.system(size: 11)).foregroundColor(Theme.textSecondary)
             }
-        case let .available(version, url):
+        case let .available(version, _, asset):
             HStack(spacing: 8) {
                 Text(String(format: state.t(.updateAvailableFmt), version))
                     .font(.system(size: 11, weight: .medium)).foregroundColor(Theme.textPrimary)
-                GlassButton(title: state.t(.updateDownload), systemIcon: "arrow.down.circle") {
-                    NSWorkspace.shared.open(url)
+                // With a DMG asset the button installs in place; otherwise it opens the page.
+                GlassButton(title: state.t(asset != nil ? .updateInstallNow : .updateDownload),
+                            systemIcon: "arrow.down.circle") {
+                    state.installUpdate()
                 }
+            }
+        case let .downloading(_, progress):
+            HStack(spacing: 8) {
+                ProgressView(value: progress).frame(width: 140)
+                Text("\(Int(progress * 100))%")
+                    .font(.system(size: 11)).foregroundColor(Theme.textSecondary)
+            }
+        case .installing:
+            HStack(spacing: 5) {
+                ProgressView().controlSize(.small)
+                Text(state.t(.updateInstalling))
+                    .font(.system(size: 11)).foregroundColor(Theme.textSecondary)
             }
         case .failed:
             HStack(spacing: 5) {
@@ -827,6 +945,43 @@ struct SettingsView: View {
     }
 }
 
+/// One row of the settings sidebar: icon + title, accent icon and soft fill when selected,
+/// subtle fill on hover.
+private struct SidebarItem: View {
+    let title: String
+    let icon: String
+    let selected: Bool
+    let action: () -> Void
+    @State private var hover = false
+    @Environment(\.themeRevision) private var revision   // re-render on theme switch
+
+    var body: some View {
+        let _ = revision
+        return Button(action: action) {
+            HStack(spacing: 9) {
+                Image(systemName: icon)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundColor(selected ? Theme.accentBlue : Theme.textSecondary)
+                    .frame(width: 18, alignment: .center)
+                Text(title)
+                    .font(.system(size: 12, weight: selected ? .semibold : .medium))
+                    .foregroundColor(selected ? Theme.textPrimary : Theme.textSecondary)
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 10)
+            .frame(height: 30)
+            .background(
+                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                    .fill(Theme.textPrimary.opacity(selected ? 0.10 : (hover ? 0.06 : 0)))
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hover = $0 }
+    }
+}
+
 /// Content for the standalone, draggable Settings window.
 struct SettingsWindowView: View {
     @EnvironmentObject var state: AppState
@@ -839,7 +994,7 @@ struct SettingsWindowView: View {
                 .padding(.horizontal, 15)          // side frames like the main window
                 .padding(.top, 8).padding(.bottom, 6)   // top matches the gap below the header
         }
-        .frame(minWidth: 560, maxWidth: .infinity, minHeight: 420, maxHeight: .infinity)
+        .frame(minWidth: 740, maxWidth: .infinity, minHeight: 340, maxHeight: .infinity)
         .tooltipLayer()
         // Bottom-right resize affordance — drag it to grow/shrink the settings window.
         .overlay(alignment: .bottomTrailing) {
