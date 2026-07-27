@@ -458,32 +458,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// Fixed part of the settings window height (header + footer + paddings around the
-    /// scroll viewport). Measured once at the first layout, before any resize animation.
-    private var settingsChromeH: CGFloat?
-
     /// Resize the settings window vertically so the scroll viewport exactly fits the open
-    /// section's content. The target height is ABSOLUTE (content + cached chrome), never a
-    /// delta from the current frame: during an animated resize `win.frame` is a mid-animation
-    /// value, and a second fit firing then (e.g. a section whose content settles late) would
-    /// compound into a wrong final height — the "section switched, content clipped" bug.
+    /// section's content. The resize is INSTANT (animate: false) on purpose: with an
+    /// animation, `win.frame` is a mid-flight value whenever a second fit lands (sections
+    /// whose content settles late), and any scheme based on it — deltas or cached chrome —
+    /// eventually locks in a wrong height. Instant resizes keep every measurement
+    /// consistent, so each fit self-corrects: delta = content − viewport of the same,
+    /// settled layout pass.
     private func fitSettingsWindow(contentH: CGFloat, viewportH: CGFloat) {
         guard let win = settingsWindow else { return }
-        let chrome = settingsChromeH ?? (win.frame.height - viewportH)
-        if settingsChromeH == nil { settingsChromeH = chrome }
+        let delta = contentH - viewportH
 
         let vf = (win.screen ?? currentScreen()).visibleFrame
-        var newH = contentH + chrome
+        var frame = win.frame
+        var newH = frame.height + delta
         newH = min(newH, vf.height - 16)              // never taller than the screen
         newH = max(newH, win.minSize.height)
 
-        var frame = win.frame
         let dh = newH - frame.height
         guard abs(dh) > 1 else { return }
         frame.origin.y -= dh                          // keep the top edge fixed
         frame.size.height = newH
         if frame.minY < vf.minY + 8 { frame.origin.y = vf.minY + 8 }   // stay on screen
-        win.setFrame(frame, display: true, animate: true)
+        win.setFrame(frame, display: true, animate: false)
     }
 
     func showSettings() {

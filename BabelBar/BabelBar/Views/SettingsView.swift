@@ -46,11 +46,10 @@ struct SettingsView: View {
     @State private var showSecondaryProvider = false
 
     // Window height auto-fit: the window resizes to the open section's content height.
-    // Fit fires when the CONTENT height changes (section switch, disclosure expand) — not
-    // when the viewport changes, so the user can still resize the window by hand.
+    // Both measurements re-fit (manual window resizing is disabled, so the viewport only
+    // changes from our own resizes) — the loop converges when viewport == content.
     @State private var contentH: CGFloat = 0
     @State private var viewportH: CGFloat = 0
-    @State private var didInitialFit = false
     @State private var permRefresh = 0   // bump to re-read permission states
     @State private var keyField = ""
     @ObservedObject private var models = WhisperModelManager.shared
@@ -110,7 +109,7 @@ struct SettingsView: View {
         }
         .onPreferenceChange(SettingsViewportHeightKey.self) { h in
             viewportH = h
-            if !didInitialFit { fitWindow() }   // first layout: shrink the default frame to fit
+            fitWindow()
         }
         .onAppear {
             if !state.settings.apiKey2.trimmingCharacters(in: .whitespaces).isEmpty {
@@ -135,7 +134,6 @@ struct SettingsView: View {
     /// Ask the window to grow/shrink so the viewport exactly fits the section's content.
     private func fitWindow() {
         guard contentH > 0, viewportH > 0 else { return }
-        didInitialFit = true
         state.onSettingsFitContent?(contentH, viewportH)
     }
 
