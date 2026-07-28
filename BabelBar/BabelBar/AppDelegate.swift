@@ -103,6 +103,12 @@ final class BlurContainerViewController: NSViewController {
     /// adjustable Gaussian blur — and at 0 disappears, revealing the clear desktop.
     private(set) weak var blurView: VariableBlurView?
 
+    /// Reports the SwiftUI content's own size whenever it changes, so a window that should
+    /// hug its content can apply it. Only fires when `tracksPreferredSize` is on. Note the
+    /// hosting controller must have `sizingOptions = [.preferredContentSize]` for SwiftUI to
+    /// publish that size at all — it does not by default.
+    var onContentSizeChange: ((NSSize) -> Void)?
+
     override func loadView() {
         let container = NSView()
         container.wantsLayer = true
@@ -131,7 +137,10 @@ final class BlurContainerViewController: NSViewController {
             content.view.topAnchor.constraint(equalTo: view.topAnchor),
             content.view.bottomAnchor.constraint(equalTo: view.bottomAnchor)
         ])
-        if tracksPreferredSize { preferredContentSize = content.preferredContentSize }
+        if tracksPreferredSize {
+            preferredContentSize = content.preferredContentSize
+            onContentSizeChange?(content.preferredContentSize)
+        }
     }
 
     /// Apply the live chrome: blur intensity (0…1) + appearance.
@@ -141,9 +150,11 @@ final class BlurContainerViewController: NSViewController {
     }
 
     override func preferredContentSizeDidChange(for viewController: NSViewController) {
-        // SwiftUI content changed its intrinsic height (translator ⇄ settings) → resize window.
+        // SwiftUI content changed its own size (e.g. a different settings section).
         guard tracksPreferredSize else { return }
-        preferredContentSize = viewController.preferredContentSize
+        let size = viewController.preferredContentSize
+        preferredContentSize = size
+        onContentSizeChange?(size)
     }
 }
 
@@ -461,6 +472,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Settings window width. Fixed: only the height varies, with the open section.
     static let settingsWidth: CGFloat = 780
 
+    /// Give the settings window the height its SwiftUI content just reported. The top edge
+    /// stays put and the height is capped to the screen. There is no measuring or feedback
+    /// here: the content hugs the open section and its height doesn't depend on the window's,
+    /// so one application settles it.
+    private func resizeSettingsToContent(height: CGFloat) {
+        guard let win = settingsWindow, height > 1 else { return }
+        let vf = (win.screen ?? currentScreen()).visibleFrame
+        let newH = min(height, vf.height - 16)
+        var frame = win.frame
+        guard abs(newH - frame.height) > 1 else { return }
+        frame.origin.y += frame.height - newH        // keep the top edge fixed
+        frame.size.height = newH
+        if frame.minY < vf.minY + 8 { frame.origin.y = vf.minY + 8 }   // stay on screen
+        win.setFrame(frame, display: true, animate: false)
+    }
+
     func showSettings() {
         if let win = settingsWindow {
             positionSettings(win)                 // open on/near the app window
@@ -473,12 +500,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .environmentObject(appState)
             .environmentObject(appState.theme)
         let hosting = NSHostingController(rootView: content)
-        // tracksPreferredSize:true — the SwiftUI content's own height is pushed up to the
-        // window, so the window is exactly as tall as the open section. This works only
-        // because the section is no longer wrapped in a ScrollView (which would report a
-        // near-zero height and collapse the window).
+        // Publish the SwiftUI content's own size — NSHostingController does not by default,
+        // which is why the window used to just keep whatever height it was created at. The
+        // section is laid out without a ScrollView and hugs its content, so the reported
+        // height is the section's real height, and the window follows it.
+        hosting.sizingOptions = [.preferredContentSize]
         let container = BlurContainerViewController(content: hosting, radius: 16,
                                                     tracksPreferredSize: true)
+        container.onContentSizeChange = { [weak self] size in
+            self?.resizeSettingsToContent(height: size.height)
+        }
 
         // Borderless (no titlebar dead zone); draggable by background. Not resizable: the
         // width is fixed and the height belongs to the content.

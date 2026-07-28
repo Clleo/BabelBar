@@ -959,7 +959,10 @@ struct SettingsWindowView: View {
     @EnvironmentObject var theme: AppTheme
 
     var body: some View {
-        ZStack {
+        // Top-aligned: the window matches the content's height, but if it ever can't (a
+        // section taller than the screen), the content starts at the top instead of being
+        // centred with dead space above it.
+        ZStack(alignment: .top) {
             Theme.windowBackground.opacity(Theme.backgroundOpacity)
             SettingsView()
                 .padding(.horizontal, 15)          // side frames like the main window
