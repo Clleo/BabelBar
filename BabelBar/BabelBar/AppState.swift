@@ -190,9 +190,6 @@ final class AppState: ObservableObject {
     var onCloseSettings: (() -> Void)?
     /// Show/hide the menu-bar status item (wired by AppDelegate).
     var onMenuBarVisibilityChanged: ((Bool) -> Void)?
-    /// Resize the settings window so its scroll viewport fits the section content
-    /// (contentHeight, viewportHeight). Wired by AppDelegate.
-    var onSettingsFitContent: ((CGFloat, CGFloat) -> Void)?
 
     private let translator = TranslationService()
 

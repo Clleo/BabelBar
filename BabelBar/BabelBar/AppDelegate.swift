@@ -458,47 +458,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// Settings window geometry: the width is fixed, the height follows the open section.
+    /// Settings window width. Fixed: only the height varies, with the open section.
     static let settingsWidth: CGFloat = 780
-    private static let settingsMinH: CGFloat = 200
-
-    /// Resize the settings window vertically so the scroll viewport exactly fits the open
-    /// section's content.
-    ///
-    /// Two deliberate choices:
-    /// • INSTANT (animate: false) — during an animated resize `win.frame` is a mid-flight
-    ///   value, so a second fit landing then (sections whose content settles late) would
-    ///   read a bogus height. Instant keeps every measurement consistent, and each fit
-    ///   self-corrects: delta = content − viewport of one settled layout pass.
-    /// • minSize == maxSize == the new size — this is what actually blocks the user from
-    ///   dragging the window's edges (a borderless window still resizes by drag while
-    ///   `.resizable` is in the mask, and the mask has to stay for programmatic resizing).
-    ///   We widen the limits right before our own setFrame, so only we can change the size.
-    private func fitSettingsWindow(contentH: CGFloat, viewportH: CGFloat) {
-        guard let win = settingsWindow else { return }
-
-        let vf = (win.screen ?? currentScreen()).visibleFrame
-        var frame = win.frame
-        var newH = frame.height + (contentH - viewportH)
-        newH = min(newH, vf.height - 16)              // never taller than the screen
-        newH = max(newH, Self.settingsMinH)
-
-        let dh = newH - frame.height
-        guard abs(dh) > 1 else { return }
-
-        let locked = NSSize(width: Self.settingsWidth, height: newH)
-        win.minSize = locked
-        win.maxSize = locked
-        frame.origin.y -= dh                          // keep the top edge fixed
-        frame.size = locked
-        if frame.minY < vf.minY + 8 { frame.origin.y = vf.minY + 8 }   // stay on screen
-        win.setFrame(frame, display: true, animate: false)
-    }
 
     func showSettings() {
-        appState.onSettingsFitContent = { [weak self] content, viewport in
-            self?.fitSettingsWindow(contentH: content, viewportH: viewport)
-        }
         if let win = settingsWindow {
             positionSettings(win)                 // open on/near the app window
             win.makeKeyAndOrderFront(nil)
@@ -510,28 +473,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .environmentObject(appState)
             .environmentObject(appState.theme)
         let hosting = NSHostingController(rootView: content)
-        // tracksPreferredSize:false so the user-resizable window isn't pinned to the content size.
+        // tracksPreferredSize:true — the SwiftUI content's own height is pushed up to the
+        // window, so the window is exactly as tall as the open section. This works only
+        // because the section is no longer wrapped in a ScrollView (which would report a
+        // near-zero height and collapse the window).
         let container = BlurContainerViewController(content: hosting, radius: 16,
-                                                    tracksPreferredSize: false)
+                                                    tracksPreferredSize: true)
 
-        // Borderless (no titlebar dead zone); draggable by background. The user can NOT
-        // resize it (no resize grip; borderless windows have no native edge handles) — but
-        // `.resizable` MUST stay in the mask: without it AppKit pins the window to the
-        // SwiftUI content's ideal size (tiny for a ScrollView) and the content-height
-        // auto-fit can't win, collapsing the window.
+        // Borderless (no titlebar dead zone); draggable by background. Not resizable: the
+        // width is fixed and the height belongs to the content.
         let window = KeyableBorderlessWindow(
             contentRect: NSRect(x: 0, y: 0, width: Self.settingsWidth, height: 680),
-            styleMask: [.borderless, .fullSizeContentView, .resizable],
+            styleMask: [.borderless, .fullSizeContentView],
             backing: .buffered, defer: false
         )
-        // Order matters: sizes first, then `settingsWindow`, then the content. The SwiftUI
-        // first layout fires the content-height fit callback during `contentViewController =`;
-        // it needs `settingsWindow` non-nil, and any setContentSize AFTER it would undo the fit.
-        // Open limits for the very first fit; from then on fitSettingsWindow pins
-        // minSize == maxSize to the content height (that's what blocks user drags).
-        window.minSize = NSSize(width: Self.settingsWidth, height: Self.settingsMinH)
-        window.maxSize = NSSize(width: Self.settingsWidth, height: 20_000)
-        window.setContentSize(NSSize(width: Self.settingsWidth, height: 680))   // auto-fit corrects it
         settingsWindow = window
         window.contentViewController = container
         window.isMovableByWindowBackground = true

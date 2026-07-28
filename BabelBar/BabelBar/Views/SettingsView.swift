@@ -28,28 +28,10 @@ enum SettingsSection: CaseIterable {
     }
 }
 
-/// Height of the selected section's cards inside the scroll view.
-private struct SettingsContentHeightKey: PreferenceKey {
-    static var defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
-}
-
-/// Height of the scroll viewport itself (the visible area).
-private struct SettingsViewportHeightKey: PreferenceKey {
-    static var defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
-}
-
 struct SettingsView: View {
     @EnvironmentObject var state: AppState
     @State private var section: SettingsSection = .general
     @State private var showSecondaryProvider = false
-
-    // Window height auto-fit: the window resizes to the open section's content height.
-    // Both measurements re-fit (manual window resizing is disabled, so the viewport only
-    // changes from our own resizes) — the loop converges when viewport == content.
-    @State private var contentH: CGFloat = 0
-    @State private var viewportH: CGFloat = 0
     @State private var permRefresh = 0   // bump to re-read permission states
     @State private var keyField = ""
     @ObservedObject private var models = WhisperModelManager.shared
@@ -76,41 +58,24 @@ struct SettingsView: View {
                 sidebar
 
                 VStack(spacing: 0) {
-                    ScrollView(.vertical) {
-                        VStack(alignment: .leading, spacing: 15) {
-                            sectionContent
-                        }
-                        // Inset from the backdrop's edges so the cards read as sitting IN the
-                        // column instead of merging with it.
-                        .padding(14)
-                        .background(GeometryReader { g in
-                            Color.clear.preference(key: SettingsContentHeightKey.self, value: g.size.height)
-                        })
+                    // No scroll view around the section: a ScrollView reports a near-zero
+                    // height upwards, which is exactly what stopped the content from sizing
+                    // the window. Laid out plainly, the section's own height flows up through
+                    // the hosting view and the window follows it (see BlurContainer's
+                    // preferred-size tracking). ViewThatFits keeps a scrolling fallback for a
+                    // section that would not fit on screen, so nothing can become unreachable.
+                    ViewThatFits(in: .vertical) {
+                        sectionCards
+                        ScrollView(.vertical) { sectionCards }
+                            .scrollIndicators(.never)
                     }
-                    .scrollIndicators(.never)
-                    // Full-height backdrop for the content column: a shade lighter than the
-                    // window background so the right side is visually its own area, and
-                    // unstroked so the cards' own borders are the only outlines here.
-                    .glassPanel(corner: 16, fill: Theme.contentBackdrop, stroked: false)
-                    .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))   // rounded scroll viewport
-                    .id(section)   // fresh scroll position when switching sections
-                    .background(GeometryReader { g in
-                        Color.clear.preference(key: SettingsViewportHeightKey.self, value: g.size.height)
-                    })
+                    .id(section)   // rebuild (and reset scrolling) when switching sections
 
-                    // Fixed footer — visible regardless of scroll position, right column only.
+                    // Fixed footer — always at the bottom of the content column.
                     saveButton
                         .padding(.top, 14)
                 }
             }
-        }
-        .onPreferenceChange(SettingsContentHeightKey.self) { h in
-            contentH = h
-            fitWindow()
-        }
-        .onPreferenceChange(SettingsViewportHeightKey.self) { h in
-            viewportH = h
-            fitWindow()
         }
         .onAppear {
             if !state.settings.apiKey2.trimmingCharacters(in: .whitespaces).isEmpty {
@@ -132,13 +97,16 @@ struct SettingsView: View {
         }
     }
 
-    /// Ask the window to grow/shrink so the viewport exactly fits the section's content.
-    private func fitWindow() {
-        guard contentH > 0, viewportH > 0 else { return }
-        state.onSettingsFitContent?(contentH, viewportH)
-    }
-
     // MARK: - Sidebar / section switching
+
+    /// The open section's cards, laid out at their natural height.
+    private var sectionCards: some View {
+        VStack(alignment: .leading, spacing: 15) {
+            sectionContent
+        }
+        .padding(.vertical, 2)   // tiny inset so rounded card corners aren't clipped
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
 
     /// Cards shown for the selected sidebar section.
     @ViewBuilder private var sectionContent: some View {
@@ -998,7 +966,9 @@ struct SettingsWindowView: View {
                 .padding(.horizontal, 15)          // side frames like the main window
                 .padding(.top, 8).padding(.bottom, 6)   // top matches the gap below the header
         }
-        .frame(minWidth: 740, maxWidth: .infinity, minHeight: 200, maxHeight: .infinity)
+        // Fixed width, free height: the height is whatever the open section needs, and the
+        // window sizes itself to it. No resize grip — the window isn't user-resizable.
+        .frame(width: AppDelegate.settingsWidth)
         .tooltipLayer()
         // Live recolor of the settings panels via the theme-revision environment (no rebuild,
         // so the open color-picker popover stays put).

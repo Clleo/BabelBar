@@ -171,11 +171,6 @@ extension Theme {
         let surfNS = NSColor(surface), fgNS = NSColor(foreground)
         Theme.fieldFill         = Color(surfNS.blended(withFraction: 0.16, of: fgNS) ?? surfNS)
         Theme.panelStroke       = foreground.opacity(0.12)
-        // Settings content column: midway between the window background and the card
-        // surface. Sitting between the two keeps it distinct from the sidebar area on one
-        // side and from the cards on the other, whichever of them is the lighter shade.
-        let bgNS = NSColor(background)
-        Theme.contentBackdrop   = Color(bgNS.blended(withFraction: 0.5, of: surfNS) ?? surfNS)
         Theme.translationFontSize = translationFontSize
     }
 }

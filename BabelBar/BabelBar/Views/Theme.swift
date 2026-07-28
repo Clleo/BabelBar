@@ -7,10 +7,6 @@ enum Theme {
     static var bgTop = Color(red: 0.105, green: 0.105, blue: 0.110)
     static var bgBottom = Color(red: 0.060, green: 0.060, blue: 0.065)
     static var panel = Theme.textPrimary.opacity(0.045)
-    /// Backdrop of the settings content column — a shade between the window background and
-    /// the card surface, so the column separates from the sidebar area while the cards on
-    /// top of it stay distinct. Recomputed by ThemeKit on every re-skin.
-    static var contentBackdrop = Theme.textPrimary.opacity(0.035)
     /// Fill for inputs / text areas — a touch more contrasty than `panel` so they don't merge
     /// with the section card they sit in. Set by ThemeKit (surface blended toward foreground).
     static var fieldFill = Theme.textPrimary.opacity(0.10)
@@ -52,12 +48,9 @@ extension EnvironmentValues {
     }
 }
 
-/// Reusable rounded glass panel. `fill`/`stroked` let large backdrop surfaces reuse the
-/// shape with their own shade and without the hairline border.
+/// Reusable rounded glass panel.
 struct GlassPanel: ViewModifier {
     var corner: CGFloat = 16
-    var fill: Color? = nil          // nil = Theme.panel (resolved live, not at init)
-    var stroked: Bool = true
     @Environment(\.themeRevision) private var revision   // forces re-eval on theme change
 
     func body(content: Content) -> some View {
@@ -65,18 +58,18 @@ struct GlassPanel: ViewModifier {
         return content
             .background(
                 RoundedRectangle(cornerRadius: corner, style: .continuous)
-                    .fill(fill ?? Theme.panel)
+                    .fill(Theme.panel)
             )
             .overlay(
                 RoundedRectangle(cornerRadius: corner, style: .continuous)
-                    .stroke(Theme.panelStroke, lineWidth: stroked ? 1 : 0)
+                    .stroke(Theme.panelStroke, lineWidth: 1)
             )
     }
 }
 
 extension View {
-    func glassPanel(corner: CGFloat = 16, fill: Color? = nil, stroked: Bool = true) -> some View {
-        modifier(GlassPanel(corner: corner, fill: fill, stroked: stroked))
+    func glassPanel(corner: CGFloat = 16) -> some View {
+        modifier(GlassPanel(corner: corner))
     }
 }
 
