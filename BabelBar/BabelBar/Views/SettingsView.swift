@@ -119,13 +119,16 @@ struct SettingsView: View {
         }
     }
 
+    /// No trailing Spacer here: a Spacer is greedy, which made this column — and through the
+    /// HStack the whole settings view — vertically flexible. The window then had no definite
+    /// height to hug and simply kept whatever size it was created at. Without it the sidebar
+    /// hugs its rows and the HStack's `.top` alignment keeps them at the top.
     private var sidebar: some View {
         VStack(alignment: .leading, spacing: 4) {
             ForEach(SettingsSection.allCases, id: \.self) { s in
                 SidebarItem(title: state.t(s.titleKey), icon: s.icon,
                             selected: section == s) { section = s }
             }
-            Spacer(minLength: 0)
         }
         .frame(width: 168)
     }
