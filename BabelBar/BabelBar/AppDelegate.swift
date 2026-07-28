@@ -82,19 +82,16 @@ final class VariableBlurView: NSView {
     }
 }
 
-/// Hosts the SwiftUI content inside a rounded, blurred NSVisualEffectView and propagates
-/// the SwiftUI intrinsic size up so the window auto-resizes (translator ⇄ settings).
+/// Hosts the SwiftUI content inside a rounded, blurred backdrop. Sizing is NOT handled here:
+/// each window owns its own size — the panel is user-resizable, the settings window follows
+/// the height its SwiftUI content reports (see `resizeSettingsToContent`).
 final class BlurContainerViewController: NSViewController {
     private let radius: CGFloat
     private let content: NSViewController
-    /// When false, the controller does NOT push its content's preferred size up to the window,
-    /// so a user-resizable window won't keep snapping back to the SwiftUI intrinsic size.
-    private let tracksPreferredSize: Bool
 
-    init(content: NSViewController, radius: CGFloat, tracksPreferredSize: Bool = true) {
+    init(content: NSViewController, radius: CGFloat) {
         self.content = content
         self.radius = radius
-        self.tracksPreferredSize = tracksPreferredSize
         super.init(nibName: nil, bundle: nil)
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
@@ -132,18 +129,12 @@ final class BlurContainerViewController: NSViewController {
             content.view.topAnchor.constraint(equalTo: view.topAnchor),
             content.view.bottomAnchor.constraint(equalTo: view.bottomAnchor)
         ])
-        if tracksPreferredSize { preferredContentSize = content.preferredContentSize }
     }
 
     /// Apply the live chrome: blur intensity (0…1) + appearance.
     func applyChrome(blurAlpha: CGFloat, appearance: NSAppearance?) {
         blurView?.intensity = blurAlpha
         blurView?.appearanceOverride = appearance
-    }
-
-    override func preferredContentSizeDidChange(for viewController: NSViewController) {
-        guard tracksPreferredSize else { return }
-        preferredContentSize = viewController.preferredContentSize
     }
 }
 
@@ -311,8 +302,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // No `.preferredContentSize` sizing → the window is free to be resized by the user
         // (the SwiftUI content stretches to fill it) instead of being pinned to 600×388.
 
-        let container = BlurContainerViewController(content: hosting, radius: 16,
-                                                    tracksPreferredSize: false)
+        let container = BlurContainerViewController(content: hosting, radius: 16)
 
         let window = KeyableBorderlessWindow(
             contentRect: NSRect(x: 0, y: 0, width: 600, height: 388),
@@ -493,8 +483,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // (see SettingsWindowView), not from AppKit's preferred-size plumbing: that path
         // never fired on a section switch, leaving the window stuck at the first section's
         // height. One mechanism only, so nothing can fight over the size.
-        let container = BlurContainerViewController(content: hosting, radius: 16,
-                                                    tracksPreferredSize: false)
+        let container = BlurContainerViewController(content: hosting, radius: 16)
         appState.onSettingsContentHeight = { [weak self] height in
             self?.resizeSettingsToContent(height: height)
         }
@@ -548,7 +537,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .environmentObject(appState)
             .environmentObject(appState.theme)
         let hosting = NSHostingController(rootView: content)
-        let container = BlurContainerViewController(content: hosting, radius: 16, tracksPreferredSize: false)
+        let container = BlurContainerViewController(content: hosting, radius: 16)
 
         // Fixed-size, non-resizable — a short guided wizard, not a resizable workspace window.
         let window = KeyableBorderlessWindow(
