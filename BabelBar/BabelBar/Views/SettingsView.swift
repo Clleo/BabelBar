@@ -58,18 +58,14 @@ struct SettingsView: View {
                 sidebar
 
                 VStack(spacing: 0) {
-                    // No scroll view around the section: a ScrollView reports a near-zero
-                    // height upwards, which is exactly what stopped the content from sizing
-                    // the window. Laid out plainly, the section's own height flows up through
-                    // the hosting view and the window follows it (see BlurContainer's
-                    // preferred-size tracking). ViewThatFits keeps a scrolling fallback for a
-                    // section that would not fit on screen, so nothing can become unreachable.
-                    ViewThatFits(in: .vertical) {
-                        sectionCards
-                        ScrollView(.vertical) { sectionCards }
-                            .scrollIndicators(.never)
-                    }
-                    .id(section)   // rebuild (and reset scrolling) when switching sections
+                    // Laid out plainly — no scroll container of any kind. A ScrollView (and
+                    // likewise a ViewThatFits that can fall back to one) reports a near-zero
+                    // height upwards, which is what kept the content from sizing the window:
+                    // a short window made the fallback kick in, which shortened the reported
+                    // height further, and the window collapsed. Plain layout means the
+                    // section's real height reaches the hosting view, and the window follows
+                    // it (see BlurContainer's preferred-size tracking).
+                    sectionCards
 
                     // Fixed footer — always at the bottom of the content column.
                     saveButton
