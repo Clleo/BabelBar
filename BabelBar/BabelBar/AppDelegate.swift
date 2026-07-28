@@ -103,11 +103,6 @@ final class BlurContainerViewController: NSViewController {
     /// adjustable Gaussian blur — and at 0 disappears, revealing the clear desktop.
     private(set) weak var blurView: VariableBlurView?
 
-    /// Reports the SwiftUI content's own size whenever it changes, so a window that should
-    /// hug its content can apply it. Only fires when `tracksPreferredSize` is on. Note the
-    /// hosting controller must have `sizingOptions = [.preferredContentSize]` for SwiftUI to
-    /// publish that size at all — it does not by default.
-    var onContentSizeChange: ((NSSize) -> Void)?
 
     override func loadView() {
         let container = NSView()
@@ -137,10 +132,7 @@ final class BlurContainerViewController: NSViewController {
             content.view.topAnchor.constraint(equalTo: view.topAnchor),
             content.view.bottomAnchor.constraint(equalTo: view.bottomAnchor)
         ])
-        if tracksPreferredSize {
-            preferredContentSize = content.preferredContentSize
-            onContentSizeChange?(content.preferredContentSize)
-        }
+        if tracksPreferredSize { preferredContentSize = content.preferredContentSize }
     }
 
     /// Apply the live chrome: blur intensity (0…1) + appearance.
@@ -150,11 +142,8 @@ final class BlurContainerViewController: NSViewController {
     }
 
     override func preferredContentSizeDidChange(for viewController: NSViewController) {
-        // SwiftUI content changed its own size (e.g. a different settings section).
         guard tracksPreferredSize else { return }
-        let size = viewController.preferredContentSize
-        preferredContentSize = size
-        onContentSizeChange?(size)
+        preferredContentSize = viewController.preferredContentSize
     }
 }
 
@@ -500,15 +489,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .environmentObject(appState)
             .environmentObject(appState.theme)
         let hosting = NSHostingController(rootView: content)
-        // Publish the SwiftUI content's own size — NSHostingController does not by default,
-        // which is why the window used to just keep whatever height it was created at. The
-        // section is laid out without a ScrollView and hugs its content, so the reported
-        // height is the section's real height, and the window follows it.
-        hosting.sizingOptions = [.preferredContentSize]
+        // The window height comes from the SwiftUI view reporting its own ideal height
+        // (see SettingsWindowView), not from AppKit's preferred-size plumbing: that path
+        // never fired on a section switch, leaving the window stuck at the first section's
+        // height. One mechanism only, so nothing can fight over the size.
         let container = BlurContainerViewController(content: hosting, radius: 16,
-                                                    tracksPreferredSize: true)
-        container.onContentSizeChange = { [weak self] size in
-            self?.resizeSettingsToContent(height: size.height)
+                                                    tracksPreferredSize: false)
+        appState.onSettingsContentHeight = { [weak self] height in
+            self?.resizeSettingsToContent(height: height)
         }
 
         // Borderless (no titlebar dead zone); draggable by background. Not resizable: the

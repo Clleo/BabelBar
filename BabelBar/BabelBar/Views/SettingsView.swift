@@ -953,25 +953,36 @@ private struct SidebarItem: View {
     }
 }
 
+/// Ideal height of the whole settings view, reported up so the window can match it.
+private struct SettingsHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
+}
+
 /// Content for the standalone, draggable Settings window.
 struct SettingsWindowView: View {
     @EnvironmentObject var state: AppState
     @EnvironmentObject var theme: AppTheme
 
     var body: some View {
-        // Top-aligned: the window matches the content's height, but if it ever can't (a
-        // section taller than the screen), the content starts at the top instead of being
-        // centred with dead space above it.
-        ZStack(alignment: .top) {
-            Theme.windowBackground.opacity(Theme.backgroundOpacity)
-            SettingsView()
-                .padding(.horizontal, 15)          // side frames like the main window
-                .padding(.top, 8).padding(.bottom, 6)   // top matches the gap below the header
-        }
-        // Fixed width, free height: the height is whatever the open section needs, and the
-        // window sizes itself to it. No resize grip — the window isn't user-resizable.
-        .frame(width: AppDelegate.settingsWidth)
-        .tooltipLayer()
+        SettingsView()
+            .padding(.horizontal, 15)          // side frames like the main window
+            .padding(.top, 8).padding(.bottom, 6)   // top matches the gap below the header
+            // Fixed width; the height is whatever the open section needs.
+            .frame(width: AppDelegate.settingsWidth)
+            // Always lay out at the IDEAL height. Without this the view is squeezed into
+            // whatever height the window currently has: a section taller than the window
+            // overflows symmetrically (clipped top AND bottom) and every measurement reports
+            // that squeezed height back, so the window could never learn it has to grow.
+            .fixedSize(horizontal: false, vertical: true)
+            .background(Theme.windowBackground.opacity(Theme.backgroundOpacity))
+            // The ideal height no longer depends on the window's, so this measurement is
+            // stable and a single resize settles it — no feedback loop.
+            .background(GeometryReader { g in
+                Color.clear.preference(key: SettingsHeightKey.self, value: g.size.height)
+            })
+            .onPreferenceChange(SettingsHeightKey.self) { state.onSettingsContentHeight?($0) }
+            .tooltipLayer()
         // Live recolor of the settings panels via the theme-revision environment (no rebuild,
         // so the open color-picker popover stays put).
         .environment(\.themeRevision, theme.revision)
