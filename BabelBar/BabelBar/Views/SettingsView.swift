@@ -80,17 +80,18 @@ struct SettingsView: View {
                         VStack(alignment: .leading, spacing: 15) {
                             sectionContent
                         }
-                        .padding(.vertical, 2)   // tiny inset so the rounded clip doesn't crop cards
+                        // Inset from the backdrop's edges so the cards read as sitting IN the
+                        // column instead of merging with it.
+                        .padding(14)
                         .background(GeometryReader { g in
                             Color.clear.preference(key: SettingsContentHeightKey.self, value: g.size.height)
                         })
                     }
                     .scrollIndicators(.never)
-                    // The viewport itself is a full-height dark panel: without it, whenever the
-                    // window is taller than the section (min height, manual resize), the area
-                    // below the cards showed the bare window blur instead of staying dark.
-                    // Unstroked: a border here would double the cards' own and read as a line.
-                    .glassPanel(corner: 16, stroked: false)
+                    // Full-height backdrop for the content column: a shade lighter than the
+                    // window background so the right side is visually its own area, and
+                    // unstroked so the cards' own borders are the only outlines here.
+                    .glassPanel(corner: 16, fill: Theme.contentBackdrop, stroked: false)
                     .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))   // rounded scroll viewport
                     .id(section)   // fresh scroll position when switching sections
                     .background(GeometryReader { g in
@@ -226,6 +227,7 @@ struct SettingsView: View {
             }
         }
         .padding(20)
+        .glassPanel(corner: 16)
     }
 
     // MARK: - UPDATES
@@ -265,6 +267,7 @@ struct SettingsView: View {
                 .foregroundColor(Theme.textSecondary)
         }
         .padding(20)
+        .glassPanel(corner: 16)
     }
 
     /// Inline result of the last update check, shown next to the button.
@@ -360,6 +363,7 @@ struct SettingsView: View {
             }
         }
         .padding(20)
+        .glassPanel(corner: 16)
     }
 
     private var licenseField: some View {
@@ -499,6 +503,7 @@ struct SettingsView: View {
             }
         }
         .padding(20)
+        .glassPanel(corner: 16)
     }
 
     @ViewBuilder private var voiceRows: some View {
@@ -566,6 +571,7 @@ struct SettingsView: View {
             permissionRow(state.t(.permMic), icon: "mic", granted: Permissions.microphone(), kind: .microphone)
         }
         .padding(20)
+        .glassPanel(corner: 16)
         .id(permRefresh)
         .onAppear { permRefresh &+= 1 }
     }
@@ -593,6 +599,7 @@ struct SettingsView: View {
             ThemeEditorView(theme: state.theme, appearance: appearanceBinding)
         }
         .padding(20)
+        .glassPanel(corner: 16)
     }
 
     /// Sets the appearance AND re-skins synchronously, so the rebuild that follows reads the
@@ -674,6 +681,7 @@ struct SettingsView: View {
             }
         }
         .padding(20)
+        .glassPanel(corner: 16)
     }
 
     // MARK: - API SETTINGS
@@ -782,6 +790,7 @@ struct SettingsView: View {
             .padding(.top, 4)
         }
         .padding(20)
+        .glassPanel(corner: 16)
     }
 
     private var saveButton: some View {
