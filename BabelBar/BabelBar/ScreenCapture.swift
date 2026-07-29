@@ -38,21 +38,24 @@ enum ScreenCapture {
 
     private static func recognizeText(in cg: CGImage, languages: [String]) async -> String? {
         await withCheckedContinuation { continuation in
-            let request = VNRecognizeTextRequest { req, _ in
-                let observations = (req.results as? [VNRecognizedTextObservation]) ?? []
-                let lines = observations.compactMap { $0.topCandidates(1).first?.string }
-                continuation.resume(returning: lines.isEmpty ? nil : lines.joined(separator: "\n"))
-            }
-            request.recognitionLevel = .accurate
-            request.usesLanguageCorrection = true
-            // Keep only languages this Vision revision actually supports (avoids a throw).
-            let supported = (try? request.supportedRecognitionLanguages()) ?? []
-            let usable = languages.filter { supported.contains($0) }
-            request.recognitionLanguages = usable.isEmpty ? ["en-US"] : usable
-
-            let handler = VNImageRequestHandler(cgImage: cg, options: [:])
+            // The Vision request and handler are created AND used on this queue: neither
+            // type is Sendable, so building them outside would hand a non-Sendable object
+            // across a concurrency boundary. `perform` is synchronous, so the results are
+            // read straight off the request instead of through a completion handler —
+            // one resume path, which also means a throw can't leave the caller hanging.
             DispatchQueue.global(qos: .userInitiated).async {
-                try? handler.perform([request])
+                let request = VNRecognizeTextRequest()
+                request.recognitionLevel = .accurate
+                request.usesLanguageCorrection = true
+                // Keep only languages this Vision revision actually supports (avoids a throw).
+                let supported = (try? request.supportedRecognitionLanguages()) ?? []
+                let usable = languages.filter { supported.contains($0) }
+                request.recognitionLanguages = usable.isEmpty ? ["en-US"] : usable
+
+                try? VNImageRequestHandler(cgImage: cg, options: [:]).perform([request])
+
+                let lines = (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }
+                continuation.resume(returning: lines.isEmpty ? nil : lines.joined(separator: "\n"))
             }
         }
     }
