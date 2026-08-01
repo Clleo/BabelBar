@@ -114,6 +114,11 @@ final class VoiceHotkeys {
     private var prevHeld = false
     private let tapThreshold: TimeInterval = 0.4   // < this on release = treat as a tap (toggle)
 
+    // Safety net: a session must always end. If the release event is lost (tap disabled, key
+    // stuck, another app grabbing the modifier) the recording would otherwise run forever.
+    private var sessionID = 0
+    private let maxSessionDuration: TimeInterval = 300
+
     // Modifiers of a combo arrive as separate flagsChanged events, so "Shift+Fn" can be
     // seen as a bare "Fn" first. When a matched combo is also the prefix of a longer
     // binding we let the flags settle before committing to an action.
@@ -190,6 +195,15 @@ final class VoiceHotkeys {
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
             // macOS disabled the tap (timeout/user input) — re-enable so global hotkeys keep working.
             if let tap { CGEvent.tapEnable(tap: tap, enable: true) }
+            // No flagsChanged was delivered while the tap was off, so the release that ends an
+            // active session may have been dropped. The state machine would then stay in
+            // `.holdPending` forever: the mic keeps recording, the pill stays on screen and the
+            // hotkey looks dead — the "app froze during dictation" bug. Re-read the real modifier
+            // state and replay it so a missed release is still seen.
+            let flags = NSEvent.modifierFlags
+            fnDown = flags.contains(.function)
+            let settled = combo(from: flags)
+            DispatchQueue.main.async { self.process(current: settled) }
             return Unmanaged.passUnretained(event)
         }
         guard type == .flagsChanged, let ns = NSEvent(cgEvent: event) else {
@@ -231,6 +245,12 @@ final class VoiceHotkeys {
         activeCombo = combo
         pressStart = pressedAt
         prevHeld = true
+        sessionID &+= 1
+        let id = sessionID
+        DispatchQueue.main.asyncAfter(deadline: .now() + maxSessionDuration) { [weak self] in
+            guard let self, self.sessionID == id, self.phase != .idle else { return }
+            self.finish()   // never leave the mic recording because a release went missing
+        }
         onStart?(action)
     }
 

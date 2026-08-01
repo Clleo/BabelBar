@@ -121,7 +121,14 @@ actor LocalWhisperTranscriber: Transcriber {
     func transcribe(samples: [Float], language: Lang?) async throws -> String {
         try await ensureLoaded()
         guard let pipe else { throw TranscriberError.modelNotReady }
-        let options = DecodingOptions(task: .transcribe, language: language?.whisperCode)
+        // `language: nil` alone does NOT mean auto-detect in WhisperKit: with the default
+        // `usePrefillPrompt: true`, `detectLanguage` defaults to false and the decoder prefills
+        // `<|en|>` (Constants.defaultLanguageCode). A forced English token on Russian speech makes
+        // Whisper *translate* instead of transcribe — the "I dictate in Russian, English text is
+        // inserted" bug. Ask for real language detection whenever we have no explicit hint.
+        let options = DecodingOptions(task: .transcribe,
+                                      language: language?.whisperCode,
+                                      detectLanguage: language == nil)
         let results = try await pipe.transcribe(audioArray: samples, decodeOptions: options)
         let text = results.map { $0.text }.joined(separator: " ")
         return text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -201,6 +208,12 @@ final class DictationEngine {
                         text = try await localT.transcribe(samples: samples, language: language)
                     }
                 case .local:
+                    // Never let `ensureLoaded()` start a lazy multi-hundred-MB download here: the
+                    // overlay would sit on its loader for minutes and the app would look frozen.
+                    // Downloads belong to the settings UI (WhisperModelManager).
+                    guard WhisperModelManager.isVariantOnDisk(settings.whisperModel.variant) else {
+                        throw TranscriberError.modelNotReady
+                    }
                     text = try await localT.transcribe(samples: samples, language: language)
                 }
                 await MainActor.run { self.isTranscribing = false; completion(.success(text)) }
