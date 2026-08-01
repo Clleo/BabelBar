@@ -214,6 +214,9 @@ struct PlainTextView: NSViewRepresentable {
 struct IconButton: View {
     let systemName: String
     var active: Bool = false
+    /// Small green dot in the top-right corner — "there's something new behind this button"
+    /// (used by the gear when an update is waiting).
+    var badge: Bool = false
     let action: () -> Void
     @State private var hover = false
 
@@ -230,6 +233,17 @@ struct IconButton: View {
                     Capsule(style: .continuous)
                         .fill(Theme.textPrimary.opacity(hover ? 0.10 : 0))
                 )
+                .overlay(alignment: .topTrailing) {
+                    if badge {
+                        Circle()
+                            .fill(Theme.accentGreen)
+                            .frame(width: 6, height: 6)
+                            // Ring in the panel colour so the dot reads as a badge on any
+                            // background instead of merging with the icon's strokes.
+                            .overlay(Circle().stroke(Theme.panel, lineWidth: 1.5))
+                            .offset(x: 1, y: -1)
+                    }
+                }
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

@@ -83,9 +83,12 @@ struct TranslatorView: View {
             IconButton(systemName: "pin.fill", active: state.isPinned) {
                 state.isPinned.toggle()
             }
-            IconButton(systemName: "gearshape") {
+            IconButton(systemName: "gearshape", badge: state.updateAvailable) {
                 state.onOpenSettings?()
             }
+            .help(state.updateAvailable
+                  ? String(format: state.t(.updateAvailableFmt), state.pendingUpdateVersion ?? "")
+                  : "")
             IconButton(systemName: "xmark") {
                 state.onRequestClose?()
             }

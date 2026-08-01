@@ -58,6 +58,12 @@ struct SettingsView: View {
                 sidebar
 
                 VStack(spacing: 0) {
+                    // "A new version is out" strip — visible from any section, not just About.
+                    if state.updateAvailable, section != .about {
+                        updateBanner
+                            .padding(.bottom, 12)
+                    }
+
                     // Laid out plainly — no scroll container of any kind. A ScrollView (and
                     // likewise a ViewThatFits that can fall back to one) reports a near-zero
                     // height upwards, which is what kept the content from sizing the window:
@@ -126,11 +132,33 @@ struct SettingsView: View {
     private var sidebar: some View {
         VStack(alignment: .leading, spacing: 4) {
             ForEach(SettingsSection.allCases, id: \.self) { s in
+                // The Updates card lives in About, so that's where the dot belongs.
                 SidebarItem(title: state.t(s.titleKey), icon: s.icon,
-                            selected: section == s) { section = s }
+                            selected: section == s,
+                            badge: s == .about && state.updateAvailable) { section = s }
             }
         }
         .frame(width: 168)
+    }
+
+    /// Banner shown outside the About section: says a newer version is out and jumps to it.
+    private var updateBanner: some View {
+        HStack(spacing: 10) {
+            Circle().fill(Theme.accentGreen).frame(width: 7, height: 7)
+            Text(String(format: state.t(.updateBannerFmt), state.pendingUpdateVersion ?? ""))
+                .font(.system(size: 12, weight: .medium))
+                .foregroundColor(Theme.textPrimary)
+            Spacer(minLength: 8)
+            GlassButton(title: state.t(.updateBannerAction), systemIcon: "arrow.down.circle") {
+                section = .about
+            }
+        }
+        .padding(.horizontal, 16).padding(.vertical, 12)
+        .glassPanel(corner: 12)
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(Theme.accentGreen.opacity(0.35), lineWidth: 1)
+        )
     }
 
     // MARK: - GITHUB STAR CARD
@@ -922,6 +950,8 @@ private struct SidebarItem: View {
     let title: String
     let icon: String
     let selected: Bool
+    /// Green dot after the title — "something new is in this section".
+    var badge: Bool = false
     let action: () -> Void
     @State private var hover = false
     @Environment(\.themeRevision) private var revision   // re-render on theme switch
@@ -938,6 +968,9 @@ private struct SidebarItem: View {
                     .font(.system(size: 12, weight: selected ? .semibold : .medium))
                     .foregroundColor(selected ? Theme.textPrimary : Theme.textSecondary)
                     .lineLimit(1)
+                if badge {
+                    Circle().fill(Theme.accentGreen).frame(width: 6, height: 6)
+                }
                 Spacer(minLength: 0)
             }
             .padding(.horizontal, 10)

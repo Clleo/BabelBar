@@ -29,8 +29,13 @@ echo "  Релиз BabelBar $cur → $VER"
 echo "============================================"
 
 # 2) Синхронизировать версию приложения с номером релиза.
+#    Оба поля обязательны: MARKETING_VERSION показывается пользователю и сравнивается
+#    с тегом релиза, CURRENT_PROJECT_VERSION — внутренний номер сборки. Если поднять
+#    только первое, macOS считает сборку той же самой.
 PBX="BabelBar.xcodeproj/project.pbxproj"
 sed -i '' "s/MARKETING_VERSION = [^;]*;/MARKETING_VERSION = $VER;/g" "$PBX"
+BUILDNO=$(( $(grep -m1 -o 'CURRENT_PROJECT_VERSION = [0-9]*' "$PBX" | grep -o '[0-9]*') + 1 ))
+sed -i '' "s/CURRENT_PROJECT_VERSION = [^;]*;/CURRENT_PROJECT_VERSION = $BUILDNO;/g" "$PBX"
 
 # 3) Собрать + подписать ВО ВРЕМЕННУЮ ПАПКУ (не на Рабочем столе!).
 #    Готовый .app здесь — лишь промежуточный продукт для упаковки в DMG,

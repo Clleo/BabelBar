@@ -30,7 +30,7 @@ enum LKey: String {
     // Updates
     case autoCheckUpdates, checkForUpdatesNow, checkingUpdates, lastChecked, neverChecked
     case updateUpToDate, updateAvailableFmt, updateFailed, updateDownload
-    case updateInstallNow, updateInstalling
+    case updateInstallNow, updateInstalling, updateBannerFmt, updateBannerAction
     // GitHub star card
     case githubStar, recentlyStarred, starsWord
     case languagePreferences, interfaceLanguage, source, target, autoDetect
@@ -130,6 +130,11 @@ enum Loc {
                         "Échec de la recherche de mises à jour", "Impossibile controllare gli aggiornamenti",
                         "Não foi possível verificar atualizações"),
         .updateDownload: r("Download", "Скачать", "Herunterladen", "Descargar", "Télécharger", "Scarica", "Baixar"),
+        .updateBannerFmt: r("BabelBar %@ is available", "Доступна новая версия BabelBar %@",
+                           "BabelBar %@ ist verfügbar", "BabelBar %@ ya está disponible",
+                           "BabelBar %@ est disponible", "BabelBar %@ è disponibile",
+                           "BabelBar %@ está disponível"),
+        .updateBannerAction: r("View", "Подробнее", "Ansehen", "Ver", "Voir", "Vedi", "Ver"),
         .updateInstallNow: r("Install Update", "Установить обновление", "Update installieren", "Instalar actualización",
                             "Installer la mise à jour", "Installa aggiornamento", "Instalar atualização"),
         .updateInstalling: r("Installing…", "Установка…", "Installation läuft…", "Instalando…",

@@ -205,8 +205,25 @@ final class AppState: ObservableObject {
         Task { @MainActor [weak self] in
             WhisperModelManager.shared.onModelReady = { [weak self] in self?.preloadLocalModel() }
             self?.preloadLocalModel()
+            self?.checkForUpdatesOnLaunch()
         }
     }
+
+    /// Silent check shortly after launch, so a new release is discovered without the user ever
+    /// opening Settings — the gear then carries a dot and the Updates section says what's new.
+    /// Throttled: at most one automatic check per `autoCheckInterval`.
+    private func checkForUpdatesOnLaunch() {
+        guard settings.autoCheckUpdates else { return }
+        if let last = settings.lastUpdateCheck,
+           Date().timeIntervalSince(last) < Self.autoCheckInterval { return }
+        // Slight delay: launch is already busy (model prewarm, hotkey taps, window setup).
+        DispatchQueue.main.asyncAfter(deadline: .now() + 4) { [weak self] in
+            guard let self, self.updateState == .idle else { return }
+            self.checkForUpdates()
+        }
+    }
+
+    private static let autoCheckInterval: TimeInterval = 6 * 3600
 
     /// Warm the local Whisper model ahead of time (only if local engine + model already on disk).
     func preloadLocalModel() {
@@ -600,6 +617,24 @@ final class AppState: ObservableObject {
         case failed
     }
     @Published var updateState: UpdateState = .idle
+
+    /// True once a newer release is known — drives the dot on the gear button and the
+    /// "update available" hint in Settings. Stays true while it downloads/installs.
+    var updateAvailable: Bool {
+        switch updateState {
+        case .available, .downloading, .installing: return true
+        default: return false
+        }
+    }
+
+    /// Version string of the pending update, for the hint text.
+    var pendingUpdateVersion: String? {
+        switch updateState {
+        case let .available(version, _, _):   return version
+        case let .downloading(version, _):    return version
+        default:                              return nil
+        }
+    }
 
     /// Fetch the repo's star count and a handful of stargazer avatars for the card.
     func loadGitHubInfo() {
