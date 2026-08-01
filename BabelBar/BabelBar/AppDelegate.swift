@@ -83,8 +83,8 @@ final class VariableBlurView: NSView {
 }
 
 /// Hosts the SwiftUI content inside a rounded, blurred backdrop. Sizing is NOT handled here:
-/// each window owns its own size — the panel is user-resizable, the settings window follows
-/// the height its SwiftUI content reports (see `resizeSettingsToContent`).
+/// each window owns its own size — the panel is user-resizable, the settings window is fixed
+/// and scrolls its content.
 final class BlurContainerViewController: NSViewController {
     private let radius: CGFloat
     private let content: NSViewController
@@ -448,27 +448,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// Settings window width. Fixed: only the height varies, with the open section.
+    /// Settings window size. Both axes fixed now: all sections live on one scrolling page,
+    /// so the window no longer resizes itself to whichever section is open.
     static let settingsWidth: CGFloat = 780
+    static let settingsHeight: CGFloat = 660
 
-    /// Give the settings window the height its SwiftUI content just reported. The top edge
-    /// stays put and the height is capped to the screen. There is no measuring or feedback
-    /// here: the content hugs the open section and its height doesn't depend on the window's,
-    /// so one application settles it.
-    private func resizeSettingsToContent(height: CGFloat) {
-        guard let win = settingsWindow, height > 1 else { return }
-        let vf = (win.screen ?? currentScreen()).visibleFrame
-        let newH = min(height, vf.height - 16)
-        var frame = win.frame
-        guard abs(newH - frame.height) > 1 else { return }
-        frame.origin.y += frame.height - newH        // keep the top edge fixed
-        frame.size.height = newH
-        if frame.minY < vf.minY + 8 { frame.origin.y = vf.minY + 8 }   // stay on screen
-        win.setFrame(frame, display: true, animate: false)
+    /// The window height, kept on screen on small displays.
+    private func settingsHeight(on screen: NSScreen) -> CGFloat {
+        min(Self.settingsHeight, screen.visibleFrame.height - 16)
     }
 
     func showSettings() {
         if let win = settingsWindow {
+            // Re-clamp: the window may have been opened on a taller screen last time.
+            let h = settingsHeight(on: win.screen ?? currentScreen())
+            if abs(win.frame.height - h) > 1 {
+                win.setContentSize(NSSize(width: Self.settingsWidth, height: h))
+            }
             positionSettings(win)                 // open on/near the app window
             win.makeKeyAndOrderFront(nil)
             updateActivationPolicy()
@@ -479,19 +475,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             .environmentObject(appState)
             .environmentObject(appState.theme)
         let hosting = NSHostingController(rootView: content)
-        // The window height comes from the SwiftUI view reporting its own ideal height
-        // (see SettingsWindowView), not from AppKit's preferred-size plumbing: that path
-        // never fired on a section switch, leaving the window stuck at the first section's
-        // height. One mechanism only, so nothing can fight over the size.
         let container = BlurContainerViewController(content: hosting, radius: 16)
-        appState.onSettingsContentHeight = { [weak self] height in
-            self?.resizeSettingsToContent(height: height)
-        }
 
-        // Borderless (no titlebar dead zone); draggable by background. Not resizable: the
-        // width is fixed and the height belongs to the content.
+        // Borderless (no titlebar dead zone); draggable by background. Not resizable and not
+        // self-sizing: the content scrolls inside a fixed frame.
         let window = KeyableBorderlessWindow(
-            contentRect: NSRect(x: 0, y: 0, width: Self.settingsWidth, height: 680),
+            contentRect: NSRect(x: 0, y: 0, width: Self.settingsWidth,
+                                height: settingsHeight(on: currentScreen())),
             styleMask: [.borderless, .fullSizeContentView],
             backing: .buffered, defer: false
         )

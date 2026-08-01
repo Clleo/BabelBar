@@ -43,6 +43,11 @@ struct SettingsView: View {
     @State private var showResetConfirm = false
     @State private var resetHover = false
 
+    // Sidebar ⇄ scroll sync.
+    @State private var scrollTarget: SettingsSection?      // set by a sidebar tap
+    @State private var spySuspendedUntil = Date.distantPast // ignore the scroll it causes
+    private static let scrollSpace = "settingsScroll"
+
     private let labelFont = Font.system(size: 12)
     private let fieldWidth: CGFloat = 400
 
@@ -58,22 +63,21 @@ struct SettingsView: View {
                 sidebar
 
                 VStack(spacing: 0) {
-                    // "A new version is out" strip — visible from any section, not just About.
-                    if state.updateAvailable, section != .about {
+                    // "A new version is out" strip — pinned above the scroll area, so it stays
+                    // visible wherever the user is on the page.
+                    if state.updateAvailable {
                         updateBanner
                             .padding(.bottom, 12)
                     }
 
-                    // Laid out plainly — no scroll container of any kind. A ScrollView (and
-                    // likewise a ViewThatFits that can fall back to one) reports a near-zero
-                    // height upwards, which is what kept the content from sizing the window:
-                    // a short window made the fallback kick in, which shortened the reported
-                    // height further, and the window collapsed. Plain layout means the
-                    // section's real height reaches the hosting view, and the window follows
-                    // it (see BlurContainer's preferred-size tracking).
-                    sectionCards
+                    // Every section on one scrolling page. The sidebar is a jump list plus a
+                    // position indicator: clicking scrolls, scrolling moves the highlight.
+                    // The window height is fixed for this to work (see AppDelegate); the old
+                    // "window hugs the open section" plumbing is gone, and with it the reason
+                    // a ScrollView used to collapse the window.
+                    sectionPages
 
-                    // Fixed footer — always at the bottom of the content column.
+                    // Fixed footer — outside the scroll area, always reachable.
                     saveButton
                         .padding(.top, 14)
                 }
@@ -101,18 +105,47 @@ struct SettingsView: View {
 
     // MARK: - Sidebar / section switching
 
-    /// The open section's cards, laid out at their natural height.
-    private var sectionCards: some View {
-        VStack(alignment: .leading, spacing: 15) {
-            sectionContent
+    /// All sections stacked in one scroll view, with two-way sync to the sidebar:
+    /// a sidebar tap scrolls here, and scrolling moves the sidebar highlight.
+    private var sectionPages: some View {
+        ScrollViewReader { proxy in
+            ScrollView(.vertical, showsIndicators: false) {
+                VStack(alignment: .leading, spacing: 15) {
+                    ForEach(SettingsSection.allCases, id: \.self) { s in
+                        VStack(alignment: .leading, spacing: 15) {
+                            cards(for: s)
+                        }
+                        .id(s)
+                        // Report this section's top edge in the scroll's own coordinate
+                        // space — that's what the highlight is derived from.
+                        .background(GeometryReader { g in
+                            Color.clear.preference(
+                                key: SectionOffsetKey.self,
+                                value: [s: g.frame(in: .named(Self.scrollSpace)).minY])
+                        })
+                    }
+                }
+                .padding(.vertical, 2)   // tiny inset so rounded card corners aren't clipped
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .coordinateSpace(name: Self.scrollSpace)
+            .onPreferenceChange(SectionOffsetKey.self) { offsets in
+                syncHighlight(with: offsets)
+            }
+            .onChange(of: scrollTarget) { target in
+                guard let target else { return }
+                // A programmatic scroll passes over every section in between; without this
+                // the highlight would strobe through them before landing.
+                spySuspendedUntil = Date().addingTimeInterval(0.5)
+                withAnimation(.easeInOut(duration: 0.28)) { proxy.scrollTo(target, anchor: .top) }
+                scrollTarget = nil
+            }
         }
-        .padding(.vertical, 2)   // tiny inset so rounded card corners aren't clipped
-        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    /// Cards shown for the selected sidebar section.
-    @ViewBuilder private var sectionContent: some View {
-        switch section {
+    /// Cards belonging to one section.
+    @ViewBuilder private func cards(for s: SettingsSection) -> some View {
+        switch s {
         case .general:     appSettings
         case .voice:       voiceSettings
         case .api:         apiSettings
@@ -125,6 +158,17 @@ struct SettingsView: View {
         }
     }
 
+    /// Highlight the last section whose top has passed the top of the viewport — i.e. the
+    /// one the user is actually reading. Ignored while a sidebar-driven scroll is running.
+    private func syncHighlight(with offsets: [SettingsSection: CGFloat]) {
+        guard Date() >= spySuspendedUntil, !offsets.isEmpty else { return }
+        let threshold: CGFloat = 24     // a section counts as "current" just before it hits the top
+        let passed = SettingsSection.allCases.filter { (offsets[$0] ?? .infinity) <= threshold }
+        // Nothing has passed yet → we're at the very top, on the first section.
+        let current = passed.last ?? SettingsSection.allCases.first!
+        if current != section { section = current }
+    }
+
     /// No trailing Spacer here: a Spacer is greedy, which made this column — and through the
     /// HStack the whole settings view — vertically flexible. The window then had no definite
     /// height to hug and simply kept whatever size it was created at. Without it the sidebar
@@ -135,7 +179,10 @@ struct SettingsView: View {
                 // The Updates card lives in About, so that's where the dot belongs.
                 SidebarItem(title: state.t(s.titleKey), icon: s.icon,
                             selected: section == s,
-                            badge: s == .about && state.updateAvailable) { section = s }
+                            badge: s == .about && state.updateAvailable) {
+                    section = s
+                    scrollTarget = s
+                }
             }
         }
         .frame(width: 168)
@@ -151,6 +198,7 @@ struct SettingsView: View {
             Spacer(minLength: 8)
             GlassButton(title: state.t(.updateBannerAction), systemIcon: "arrow.down.circle") {
                 section = .about
+                scrollTarget = .about
             }
         }
         .padding(.horizontal, 16).padding(.vertical, 12)
@@ -986,10 +1034,13 @@ private struct SidebarItem: View {
     }
 }
 
-/// Ideal height of the whole settings view, reported up so the window can match it.
-private struct SettingsHeightKey: PreferenceKey {
-    static var defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
+/// Top edge of each section inside the settings scroll view — drives the sidebar highlight.
+private struct SectionOffsetKey: PreferenceKey {
+    static var defaultValue: [SettingsSection: CGFloat] = [:]
+    static func reduce(value: inout [SettingsSection: CGFloat],
+                       nextValue: () -> [SettingsSection: CGFloat]) {
+        value.merge(nextValue()) { _, new in new }
+    }
 }
 
 /// Content for the standalone, draggable Settings window.
@@ -1001,20 +1052,12 @@ struct SettingsWindowView: View {
         SettingsView()
             .padding(.horizontal, 15)          // side frames like the main window
             .padding(.top, 8).padding(.bottom, 6)   // top matches the gap below the header
-            // Fixed width; the height is whatever the open section needs.
+            // Fixed size both ways. The content no longer decides the window height — the
+            // sections scroll inside it — so there is no ideal-height measurement and no
+            // resize feedback loop left to go wrong.
             .frame(width: AppDelegate.settingsWidth)
-            // Always lay out at the IDEAL height. Without this the view is squeezed into
-            // whatever height the window currently has: a section taller than the window
-            // overflows symmetrically (clipped top AND bottom) and every measurement reports
-            // that squeezed height back, so the window could never learn it has to grow.
-            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxHeight: .infinity)
             .background(Theme.windowBackground.opacity(Theme.backgroundOpacity))
-            // The ideal height no longer depends on the window's, so this measurement is
-            // stable and a single resize settles it — no feedback loop.
-            .background(GeometryReader { g in
-                Color.clear.preference(key: SettingsHeightKey.self, value: g.size.height)
-            })
-            .onPreferenceChange(SettingsHeightKey.self) { state.onSettingsContentHeight?($0) }
             .tooltipLayer()
         // Live recolor of the settings panels via the theme-revision environment (no rebuild,
         // so the open color-picker popover stays put).
