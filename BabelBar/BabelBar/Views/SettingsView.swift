@@ -1052,11 +1052,12 @@ struct SettingsWindowView: View {
         SettingsView()
             .padding(.horizontal, 15)          // side frames like the main window
             .padding(.top, 8).padding(.bottom, 6)   // top matches the gap below the header
-            // Fixed size both ways. The content no longer decides the window height — the
-            // sections scroll inside it — so there is no ideal-height measurement and no
-            // resize feedback loop left to go wrong.
-            .frame(width: AppDelegate.settingsWidth)
-            .frame(maxHeight: .infinity)
+            // Fixed size both ways, and both numbers are the window's own. A scrolling page
+            // has no ideal height to report, so asking for `maxHeight: .infinity` left the
+            // hosting controller with a near-zero fitting size — state a concrete height
+            // instead. No ideal-height measurement, no resize feedback loop.
+            .frame(width: AppDelegate.settingsWidth,
+                   height: AppDelegate.settingsWindowHeight())
             .background(Theme.windowBackground.opacity(Theme.backgroundOpacity))
             .tooltipLayer()
         // Live recolor of the settings panels via the theme-revision environment (no rebuild,

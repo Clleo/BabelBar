@@ -451,17 +451,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Settings window size. Both axes fixed now: all sections live on one scrolling page,
     /// so the window no longer resizes itself to whichever section is open.
     static let settingsWidth: CGFloat = 780
-    static let settingsHeight: CGFloat = 660
+    private static let settingsIdealHeight: CGFloat = 660
 
-    /// The window height, kept on screen on small displays.
-    private func settingsHeight(on screen: NSScreen) -> CGFloat {
-        min(Self.settingsHeight, screen.visibleFrame.height - 16)
+    /// The window height, kept on screen on small displays. The SwiftUI content asks for
+    /// exactly this too — a scrolling view has no ideal height of its own, so without a
+    /// concrete number the hosting controller reports a near-zero fitting size and the
+    /// window collapses the moment it adopts the content view controller.
+    static func settingsWindowHeight(on screen: NSScreen? = nil) -> CGFloat {
+        guard let vf = (screen ?? NSScreen.main)?.visibleFrame else { return settingsIdealHeight }
+        return min(settingsIdealHeight, vf.height - 16)
     }
 
     func showSettings() {
         if let win = settingsWindow {
             // Re-clamp: the window may have been opened on a taller screen last time.
-            let h = settingsHeight(on: win.screen ?? currentScreen())
+            let h = Self.settingsWindowHeight(on: win.screen ?? currentScreen())
             if abs(win.frame.height - h) > 1 {
                 win.setContentSize(NSSize(width: Self.settingsWidth, height: h))
             }
@@ -481,12 +485,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // self-sizing: the content scrolls inside a fixed frame.
         let window = KeyableBorderlessWindow(
             contentRect: NSRect(x: 0, y: 0, width: Self.settingsWidth,
-                                height: settingsHeight(on: currentScreen())),
+                                height: Self.settingsWindowHeight(on: currentScreen())),
             styleMask: [.borderless, .fullSizeContentView],
             backing: .buffered, defer: false
         )
         settingsWindow = window
         window.contentViewController = container
+        // Adopting a content view controller makes the window take that controller's fitting
+        // size, which happens BEFORE SwiftUI has laid anything out — the window ended up at
+        // roughly zero, `positionSettings` then placed a zero-width window and the content
+        // grew to 780pt afterwards, hanging off the right of the screen. Pin the size back
+        // before anything reads the frame.
+        window.setContentSize(NSSize(width: Self.settingsWidth,
+                                     height: Self.settingsWindowHeight(on: currentScreen())))
         window.isMovableByWindowBackground = true
         window.backgroundColor = .clear
         window.isOpaque = false
