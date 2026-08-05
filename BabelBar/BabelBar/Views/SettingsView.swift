@@ -592,7 +592,7 @@ struct SettingsView: View {
                                   fontSize: 12, textColor: Theme.textPrimary)
                         .frame(height: 64)
                         .padding(10)
-                        .fieldPanel(corner: 16)
+                        .fieldPanel(corner: 16, subtle: true)
                 }
             }
             row(state.t(.triggerSound)) {
@@ -838,7 +838,7 @@ struct SettingsView: View {
                                   textColor: Theme.textPrimary)
                         .frame(height: aiHeight)
                         .padding(10)
-                        .fieldPanel(corner: 16)
+                        .fieldPanel(corner: 16, subtle: true)
 
                     ResizeCornerGrip()
                         .padding(6)

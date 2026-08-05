@@ -78,6 +78,9 @@ extension View {
 /// dark themes, slightly darker in light themes — readable separation either way.
 struct FieldPanel: ViewModifier {
     var corner: CGFloat = 9
+    /// Large multi-line areas read as a heavy slab at the normal fill, so they use the same
+    /// light tint as a segmented-control track instead — visible, but not louder than the card.
+    var subtle: Bool = false
     @Environment(\.themeRevision) private var revision
 
     func body(content: Content) -> some View {
@@ -85,7 +88,7 @@ struct FieldPanel: ViewModifier {
         return content
             .background(
                 RoundedRectangle(cornerRadius: corner, style: .continuous)
-                    .fill(Theme.fieldFill)
+                    .fill(subtle ? Theme.textPrimary.opacity(0.05) : Theme.fieldFill)
             )
             .overlay(
                 RoundedRectangle(cornerRadius: corner, style: .continuous)
@@ -95,8 +98,8 @@ struct FieldPanel: ViewModifier {
 }
 
 extension View {
-    func fieldPanel(corner: CGFloat = 9) -> some View {
-        modifier(FieldPanel(corner: corner))
+    func fieldPanel(corner: CGFloat = 9, subtle: Bool = false) -> some View {
+        modifier(FieldPanel(corner: corner, subtle: subtle))
     }
 }
 
