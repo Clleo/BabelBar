@@ -149,6 +149,11 @@ final class DictationEngine {
     /// Reports model warm-up state (true = loading/initializing, false = ready). Invoked on main.
     var onPreparing: (@MainActor (Bool) -> Void)?
 
+    /// Optional LLM cleanup of the transcript, wired by AppState (it owns the API accounts and
+    /// the token counter). Must return the input unchanged when it can't do better — a dictation
+    /// is never dropped because the cleanup failed.
+    var aiCleanup: ((String, AppSettings) async -> String)?
+
     /// Microphone permission (Whisper needs only the mic, not Speech Recognition).
     func requestMic(_ cb: @escaping (Bool) -> Void) {
         if AVCaptureDevice.authorizationStatus(for: .audio) == .authorized { cb(true); return }
@@ -216,11 +221,25 @@ final class DictationEngine {
                     }
                     text = try await localT.transcribe(samples: samples, language: language)
                 }
-                await MainActor.run { self.isTranscribing = false; completion(.success(text)) }
+                let final = await self.postProcess(text, settings: settings)
+                await MainActor.run { self.isTranscribing = false; completion(.success(final)) }
             } catch {
                 await MainActor.run { self.isTranscribing = false; completion(.failure(error)) }
             }
         }
+    }
+
+    /// Shared post-recognition stage for **every** dictation path (mic button, Fn, Shift+Fn),
+    /// which is why it lives here and not in the callers: spoken punctuation has to be resolved
+    /// before the Shift+Fn transcript reaches the translator, or "запятая" gets translated as a word.
+    private func postProcess(_ text: String, settings: AppSettings) async -> String {
+        guard !text.isEmpty else { return text }
+        var out = text
+        if settings.voiceCommandsEnabled { out = VoiceCommands.apply(to: out) }
+        if settings.dictationCleanupEnabled, let aiCleanup, !out.isEmpty {
+            out = await aiCleanup(out, settings)
+        }
+        return out
     }
 
     private func localTranscriber(variant: String) -> LocalWhisperTranscriber {

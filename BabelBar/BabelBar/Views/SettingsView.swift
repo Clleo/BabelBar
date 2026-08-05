@@ -572,6 +572,29 @@ struct SettingsView: View {
                     set: { state.settings.duckAudio = $0; state.saveSettings() }
                 ))
             }
+            row(state.t(.voiceCommands), help: state.t(.tipVoiceCommands)) {
+                CapsuleToggle(isOn: Binding(
+                    get: { state.settings.voiceCommandsEnabled },
+                    set: { state.settings.voiceCommandsEnabled = $0; state.saveSettings() }
+                ))
+            }
+            row(state.t(.dictationCleanup), help: state.t(.tipDictationCleanup)) {
+                CapsuleToggle(isOn: Binding(
+                    get: { state.settings.dictationCleanupEnabled },
+                    set: { state.settings.dictationCleanupEnabled = $0; state.saveSettings() }
+                ))
+            }
+            if state.settings.dictationCleanupEnabled {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(state.t(.dictationInstructions))
+                        .foregroundColor(Theme.textPrimary).font(labelFont)
+                    PlainTextView(text: $state.settings.dictationInstructions, isEditable: true,
+                                  fontSize: 12, textColor: Theme.textPrimary)
+                        .frame(height: 64)
+                        .padding(10)
+                        .fieldPanel(corner: 16)
+                }
+            }
             row(state.t(.triggerSound)) {
                 HStack(spacing: 10) {
                     // Volume

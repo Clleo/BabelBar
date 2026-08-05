@@ -45,40 +45,58 @@ struct TranslationService {
     /// next configured account. Returns the result and which slot served it.
     func translate(text: String, from: Lang, to: Lang, instructions: String,
                    accounts: [ProviderConfig], startIndex: Int) async throws -> TranslationResult {
-        let usable = accounts.filter { $0.hasKey }
-        guard !usable.isEmpty else { throw TranslationError.missingKey }
-
-        // Order: start with the active slot, then the rest.
-        let ordered = usable.sorted { a, b in
-            (a.slot == startIndex ? 0 : 1) < (b.slot == startIndex ? 0 : 1)
-        }
-
-        var lastError: Error = TranslationError.missingKey
-        for account in ordered {
-            do {
-                let r = try await request(text: text, from: from, to: to,
-                                          instructions: instructions, account: account)
-                return r
-            } catch {
-                lastError = error   // try the next account
-            }
-        }
-        throw lastError
-    }
-
-    private func request(text: String, from: Lang, to: Lang, instructions: String,
-                         account: ProviderConfig) async throws -> TranslationResult {
-        let apiKey = account.apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        let base = account.baseURL.isEmpty ? account.provider.defaultBaseURL : account.baseURL
-        guard let url = URL(string: base.trimmingCharacters(in: .init(charactersIn: "/")) + "/chat/completions") else {
-            throw TranslationError.badResponse("Invalid base URL")
-        }
-
         let system = """
         You are a professional translation engine. Translate the user's text from \(languageName(from)) to \(languageName(to)).
         Return ONLY the translated text, with no quotes, no explanations, no notes.
         Additional style instructions: \(instructions)
         """
+        return try await run(system: system, text: text, accounts: accounts,
+                             startIndex: startIndex, temperature: 0.2)
+    }
+
+    /// Clean up a raw dictation transcript (punctuation, capitalization, obvious recognition
+    /// slips) with the same account failover as translation. Used only when the user turns the
+    /// AI cleanup on — the local `VoiceCommands` pass handles spoken punctuation for free.
+    func cleanupDictation(text: String, instructions: String,
+                          accounts: [ProviderConfig], startIndex: Int) async throws -> TranslationResult {
+        let system = """
+        You are a dictation post-processor. The user's message is a raw speech-to-text transcript.
+        Return ONLY the corrected transcript: same language, same wording and meaning, nothing added,
+        nothing removed, no quotes, no explanations, no comments about what you changed.
+        Fix punctuation, capitalization and obvious recognition slips.
+        When the transcript spells out the NAME of a punctuation mark that was clearly dictated as a
+        command (comma, period, colon, dash, new line — «запятая», «точка», «двоеточие», «тире»,
+        «с новой строки»), replace that word with the mark itself instead of writing it out.
+        Additional user rules: \(instructions)
+        """
+        return try await run(system: system, text: text, accounts: accounts,
+                             startIndex: startIndex, temperature: 0)
+    }
+
+    /// Shared account-failover loop: try `startIndex` first, then every other configured account.
+    private func run(system: String, text: String, accounts: [ProviderConfig],
+                     startIndex: Int, temperature: Double) async throws -> TranslationResult {
+        let usable = accounts.filter { $0.hasKey }
+        guard !usable.isEmpty else { throw TranslationError.missingKey }
+        let ordered = usable.sorted { a, b in
+            (a.slot == startIndex ? 0 : 1) < (b.slot == startIndex ? 0 : 1)
+        }
+        var lastError: Error = TranslationError.missingKey
+        for account in ordered {
+            do { return try await chat(system: system, text: text, account: account, temperature: temperature) }
+            catch { lastError = error }
+        }
+        throw lastError
+    }
+
+    /// One /chat/completions round-trip against a single account.
+    private func chat(system: String, text: String, account: ProviderConfig,
+                      temperature: Double) async throws -> TranslationResult {
+        let apiKey = account.apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        let base = account.baseURL.isEmpty ? account.provider.defaultBaseURL : account.baseURL
+        guard let url = URL(string: base.trimmingCharacters(in: .init(charactersIn: "/")) + "/chat/completions") else {
+            throw TranslationError.badResponse("Invalid base URL")
+        }
 
         let body: [String: Any] = [
             "model": account.model.isEmpty ? account.provider.defaultModel : account.model,
@@ -86,7 +104,7 @@ struct TranslationService {
                 ["role": "system", "content": system],
                 ["role": "user", "content": text]
             ],
-            "temperature": 0.2
+            "temperature": temperature
         ]
 
         var req = URLRequest(url: url)

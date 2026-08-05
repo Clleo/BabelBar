@@ -143,6 +143,15 @@ struct AppSettings: Codable {
     var showRecordingDot = true     // red dot next to the recording waveform (loader unaffected)
     var duckAudio = true            // lower system output volume while dictating (mic clarity)
 
+    // Dictation post-processing (Whisper itself cannot follow instructions — see VoiceCommands).
+    /// Turn spoken punctuation into real marks ("запятая" → ","). Local, instant, offline.
+    var voiceCommandsEnabled = true
+    /// Additionally run every transcript through the translation LLM for cleanup. Costs tokens
+    /// and roughly a second per dictation, so it is opt-in.
+    var dictationCleanupEnabled = false
+    /// Free-form rules for that cleanup pass (separate from `aiInstructions`, which is translation-only).
+    var dictationInstructions: String = "Fix punctuation and capitalization. Keep the original wording and language."
+
     // Speech-to-text engine selection.
     var speechEngine: SpeechEngine = .local
     var whisperModel: WhisperModel = .base
@@ -161,6 +170,7 @@ struct AppSettings: Codable {
         case showMenuBarIcon, autoCheckUpdates, lastUpdateCheck
         case openHotKey, selectionHotKey, screenshotHotKey
         case dictateHotkey, translateDictateHotkey, voiceInputEnabled, voiceSoundEnabled, voiceSoundName, voiceSoundVolume, showRecordingDot, duckAudio
+        case voiceCommandsEnabled, dictationCleanupEnabled, dictationInstructions
         case speechEngine, whisperModel, insertMethod
         case transcriptionProvider, transcriptionBaseURL, transcriptionModel
     }
@@ -199,6 +209,9 @@ struct AppSettings: Codable {
         voiceSoundVolume = (try? c.decode(Double.self, forKey: .voiceSoundVolume)) ?? 0.8
         showRecordingDot = (try? c.decode(Bool.self, forKey: .showRecordingDot)) ?? true
         duckAudio = (try? c.decode(Bool.self, forKey: .duckAudio)) ?? true
+        voiceCommandsEnabled = (try? c.decode(Bool.self, forKey: .voiceCommandsEnabled)) ?? true
+        dictationCleanupEnabled = (try? c.decode(Bool.self, forKey: .dictationCleanupEnabled)) ?? false
+        dictationInstructions = (try? c.decode(String.self, forKey: .dictationInstructions)) ?? AppSettings().dictationInstructions
         speechEngine = (try? c.decode(SpeechEngine.self, forKey: .speechEngine)) ?? .local
         whisperModel = (try? c.decode(WhisperModel.self, forKey: .whisperModel)) ?? .base
         insertMethod = (try? c.decode(InsertMethod.self, forKey: .insertMethod)) ?? .paste

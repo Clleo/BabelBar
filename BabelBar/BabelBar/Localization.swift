@@ -36,6 +36,7 @@ enum LKey: String {
     case languagePreferences, interfaceLanguage, source, target, autoDetect
     // Voice
     case dictateToCursor, translateAtCursor, triggerSound, showRecordingDot, duckAudio
+    case voiceCommands, dictationCleanup, dictationInstructions
     // Permissions
     case permAccessibility, permInput, permScreen, permMic, permSpeech
     case granted, openSettings
@@ -60,7 +61,7 @@ enum LKey: String {
     case apiOffline, apiNoTokens, apiOnline
     // Tooltips
     case tipOpen, tipTranslateAuto, tipScreenshot, tipDictate, tipTranslateAtCursor, tipAIInstructions
-    case tipShowRecordingDot, tipDuckAudio
+    case tipShowRecordingDot, tipDuckAudio, tipVoiceCommands, tipDictationCleanup
     // Onboarding
     case obWelcomeTitle, obWelcomeSubtitle, obBack, obContinue, obSkip, obGetStarted, obGrantAccess
     case obPermAccessibilityDesc, obPermInputDesc, obPermScreenDesc, obPermMicDesc
@@ -181,6 +182,16 @@ enum Loc {
                      "Ton beim Diktieren dämpfen", "Bajar el audio al dictar",
                      "Atténuer le son pendant la dictée", "Abbassa l’audio durante la dettatura",
                      "Abaixar o áudio ao ditar"),
+        .voiceCommands: r("Spoken punctuation", "Знаки препинания голосом",
+                          "Satzzeichen per Sprache", "Puntuación por voz",
+                          "Ponctuation dictée", "Punteggiatura vocale", "Pontuação por voz"),
+        .dictationCleanup: r("AI cleanup of dictation", "Обработка диктовки ИИ",
+                             "KI-Nachbearbeitung des Diktats", "Limpieza del dictado con IA",
+                             "Nettoyage IA de la dictée", "Pulizia della dettatura con IA",
+                             "Limpeza do ditado com IA"),
+        .dictationInstructions: r("Dictation rules", "Правила диктовки", "Diktier-Regeln",
+                                  "Reglas de dictado", "Règles de dictée", "Regole di dettatura",
+                                  "Regras de ditado"),
 
         // Permissions
         .permAccessibility: r("Accessibility", "Универсальный доступ", "Bedienungshilfen", "Accesibilidad",
@@ -397,6 +408,22 @@ enum Loc {
             "Réduit le volume du système pendant la dictée, pour que la musique ou un autre son des haut-parleurs n’entre pas dans le micro. Le volume est rétabli dès l’arrêt.",
             "Abbassa il volume di sistema durante la dettatura, così la musica o altro audio dagli altoparlanti non entra nel microfono. Il volume viene ripristinato allo stop.",
             "Abaixa o volume do sistema enquanto você dita, para que música ou outro áudio dos alto-falantes não entre no microfone. O volume é restaurado ao parar."),
+        .tipVoiceCommands: r(
+            "Say «comma», «period», «colon», «dash», «new line» and the mark itself is inserted instead of the word. Works offline, in every dictation mode, with no delay. Only the plain dictionary form counts as a command, so a sentence that mentions punctuation stays as text.",
+            "Скажи «запятая», «точка», «двоеточие», «тире», «с новой строки» — вместо слова подставится сам знак. Работает офлайн, во всех режимах диктовки и без задержки. Командой считается только слово в именительном падеже, поэтому фраза, где знак просто упоминается («поставь запятую»), останется текстом.",
+            "Sag «Komma», «Punkt», «Doppelpunkt», «Gedankenstrich», «neue Zeile» — statt des Wortes wird das Zeichen eingefügt. Funktioniert offline, in jedem Diktiermodus und ohne Verzögerung. Nur die Grundform zählt als Befehl, ein Satz, der ein Satzzeichen bloß erwähnt, bleibt Text.",
+            "Di «coma», «punto», «dos puntos», «guion», «nueva línea» y se inserta el signo en lugar de la palabra. Funciona sin conexión, en todos los modos de dictado y sin retardo. Solo la forma básica cuenta como comando, así que una frase que menciona el signo se queda como texto.",
+            "Dis «virgule», «point», «deux-points», «tiret», «nouvelle ligne» : le signe est inséré à la place du mot. Fonctionne hors ligne, dans tous les modes de dictée et sans délai. Seule la forme de base compte comme commande, une phrase qui mentionne la ponctuation reste du texte.",
+            "Di' «virgola», «punto», «due punti», «trattino», «a capo»: al posto della parola viene inserito il segno. Funziona offline, in ogni modalità di dettatura e senza ritardo. Solo la forma base vale come comando, così una frase che nomina la punteggiatura resta testo.",
+            "Diga «vírgula», «ponto», «dois-pontos», «travessão», «nova linha» e o sinal é inserido no lugar da palavra. Funciona offline, em todos os modos de ditado e sem atraso. Só a forma básica conta como comando, então uma frase que menciona a pontuação continua sendo texto."),
+        .tipDictationCleanup: r(
+            "Runs every transcript through your translation API to fix punctuation, capitalization and recognition slips by your own rules. Costs tokens and adds about a second to each dictation; if it fails, the raw transcript is inserted unchanged.",
+            "Прогоняет каждую расшифровку через твой API перевода: чинит пунктуацию, заглавные буквы и оговорки по твоим правилам. Тратит токены и добавляет около секунды к каждой диктовке; если запрос не удался, вставится исходный текст.",
+            "Schickt jedes Transkript durch deine Übersetzungs-API, um Satzzeichen, Großschreibung und Erkennungsfehler nach deinen Regeln zu korrigieren. Kostet Tokens und dauert rund eine Sekunde pro Diktat; schlägt es fehl, wird das Original eingefügt.",
+            "Pasa cada transcripción por tu API de traducción para corregir puntuación, mayúsculas y errores de reconocimiento según tus reglas. Consume tokens y añade cerca de un segundo por dictado; si falla, se inserta el texto original.",
+            "Fait passer chaque transcription par ton API de traduction pour corriger la ponctuation, les majuscules et les erreurs de reconnaissance selon tes règles. Consomme des tokens et ajoute environ une seconde par dictée ; en cas d'échec, le texte brut est inséré.",
+            "Passa ogni trascrizione attraverso la tua API di traduzione per correggere punteggiatura, maiuscole ed errori di riconoscimento secondo le tue regole. Consuma token e aggiunge circa un secondo per dettatura; se fallisce, viene inserito il testo originale.",
+            "Passa cada transcrição pela sua API de tradução para corrigir pontuação, maiúsculas e falhas de reconhecimento conforme suas regras. Consome tokens e adiciona cerca de um segundo por ditado; se falhar, o texto original é inserido."),
 
         // Onboarding
         .obWelcomeTitle: r("Welcome to BabelBar", "Добро пожаловать в BabelBar", "Willkommen bei BabelBar",

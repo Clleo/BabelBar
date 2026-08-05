@@ -200,6 +200,9 @@ final class AppState: ObservableObject {
         // Prewarm the local model in the background (on launch and after each download),
         // so the first dictation isn't stuck compiling/loading the CoreML model.
         dictationEngine.onPreparing = { ready in WhisperModelManager.shared.preparing = ready }
+        dictationEngine.aiCleanup = { [weak self] text, settings in
+            await self?.cleanUpDictation(text, settings: settings) ?? text
+        }
         Task { @MainActor [weak self] in
             WhisperModelManager.shared.onModelReady = { [weak self] in self?.preloadLocalModel() }
             self?.preloadLocalModel()
@@ -367,6 +370,24 @@ final class AppState: ObservableObject {
     /// translates. With the default Source = RU, dictating English produced Russian text.
     /// Auto-detect keeps plain dictation (Fn) in whatever language you actually spoke.
     private func dictationLanguage() -> Lang? { nil }
+
+    /// Optional LLM pass over a finished transcript (opt-in in Settings). Runs on the same
+    /// accounts as translation, with its own instructions field. Any failure — offline, no key,
+    /// bad model — returns the original text: a dictation is never lost to a cleanup error.
+    private func cleanUpDictation(_ text: String, settings: AppSettings) async -> String {
+        let accounts = self.accounts
+        guard accounts.contains(where: { $0.hasKey }) else { return text }
+        do {
+            let result = try await translator.cleanupDictation(
+                text: text, instructions: settings.dictationInstructions,
+                accounts: accounts, startIndex: settings.activeSlot
+            )
+            await MainActor.run { self.applyTranslationResult(result) }
+            return result.text.isEmpty ? text : result.text
+        } catch {
+            return text
+        }
+    }
 
     /// Request microphone access without starting a recording (used by onboarding).
     func requestMicrophoneAccess(_ completion: @escaping (Bool) -> Void) {
