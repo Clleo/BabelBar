@@ -129,7 +129,7 @@ struct AppSettings: Codable {
     var tokensLimit: Int = 500_000
 
     // Configurable hotkeys.
-    var openHotKey = KeyCombo(keyCode: 49, command: false, shift: false, option: true)       // ⌥ Space
+    var openHotKey = KeyCombo(keyCode: 37, command: false, shift: false, option: true)       // ⌥ L
     var selectionHotKey = KeyCombo(keyCode: 8, command: true)                                 // ⌘ C (double-tap)
     var screenshotHotKey = KeyCombo(keyCode: 19, command: true, shift: true)                  // ⇧ ⌘ 2
 
@@ -215,6 +215,10 @@ enum SettingsStore {
     private static let key = "babelbar.settings"
     private static let demoBaselineKey = "babelbar.demoBaselineRemoved"
     private static let demoBaseline = 124_500
+    private static let openHotKeyMigrationKey = "babelbar.openHotKeyOptLMigrated"
+    /// The pre-⌥L default (⌥ Space) — only this exact combo is migrated, so a user's
+    /// own choice of open-hotkey is never overwritten.
+    private static let legacyOpenHotKey = KeyCombo(keyCode: 49, option: true)
 
     static func load() -> AppSettings {
         let hadSaved = UserDefaults.standard.data(forKey: key) != nil
@@ -235,6 +239,14 @@ enum SettingsStore {
             if s.tokensUsed >= demoBaseline { s.tokensUsed -= demoBaseline }
             UserDefaults.standard.set(true, forKey: demoBaselineKey)
             save(s)
+        }
+        // One-time move of the default open-hotkey ⌥Space → ⌥L.
+        if !UserDefaults.standard.bool(forKey: openHotKeyMigrationKey) {
+            if hadSaved, s.openHotKey == legacyOpenHotKey {
+                s.openHotKey = AppSettings().openHotKey
+                save(s)
+            }
+            UserDefaults.standard.set(true, forKey: openHotKeyMigrationKey)
         }
         return s
     }

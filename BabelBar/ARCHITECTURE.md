@@ -89,7 +89,7 @@ BabelBar/                         ← корень проекта
                                                 │ configure(appState:)
                                        ┌────────┴───────────┐
                                        │  HotKeyManager     │
-                                       │ ⌥Space / ⌘CC / ⇧⌘2 │
+                                       │ ⌥L / ⌘CC / ⇧⌘2     │
                                        └────────────────────┘
 
    AppState вызывает сервисы:
@@ -160,7 +160,7 @@ BabelBar/                         ← корень проекта
 
 ### HotKeyManager.swift
 Глобальные хоткеи:
-- `⌥ + Space` и `⇧ + ⌘ + 2` — через Carbon `RegisterEventHotKey` + `InstallEventHandler`.
+- `⌥ + L` и `⇧ + ⌘ + 2` — через Carbon `RegisterEventHotKey` + `InstallEventHandler`.
 - `⌘ + C + C` (двойной ⌘C) — через `NSEvent.addGlobalMonitorForEvents`, считает два нажатия в пределах 0.5 c.
 
 ### Transcriber.swift
@@ -203,7 +203,7 @@ BabelBar/                         ← корень проекта
   Одноразовая миграция убрала старое демо-значение 124 500.
 - Текстовые поля — свой `PlainTextView` (NSTextView): без скроллбаров, белый текст в тёмной теме.
 - Hover-эффекты на всех кнопках.
-- Глобальные хоткеи: ⌥Space, ⇧⌘2, и ⌘+C+C — **независимо от раскладки** (матч по keyCode).
+- Глобальные хоткеи: ⌥L, ⇧⌘2, и ⌘+C+C — **независимо от раскладки** (матч по keyCode).
 - API-ключи (перевод + транскрипция) хранятся в **Keychain** (service `com.babelbar.secrets`); остальные настройки — в `UserDefaults`.
 - **Voice Recognition** (Whisper) — локальное (WhisperKit, первый запуск ~600 MB) или удалённое (Groq API).
   Автоматическая загрузка моделей с правильной валидацией (отличает полные загрузки от промежуточного кэша).

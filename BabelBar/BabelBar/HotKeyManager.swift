@@ -2,7 +2,7 @@ import AppKit
 import Carbon.HIToolbox
 
 /// Registers global hotkeys from user settings:
-///   • Open BabelBar     → single Carbon hotkey (default ⌥Space)
+///   • Open BabelBar     → single Carbon hotkey (default ⌥L)
 ///   • Translate Screenshot  → single Carbon hotkey (default ⇧⌘2)
 ///   • Translate selection   → double-tap of a combo via global monitor (default ⌘C)
 final class HotKeyManager {
