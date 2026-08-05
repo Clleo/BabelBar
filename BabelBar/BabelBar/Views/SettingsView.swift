@@ -46,6 +46,7 @@ struct SettingsView: View {
     // Sidebar ⇄ scroll sync.
     @State private var scrollTarget: SettingsSection?      // set by a sidebar tap
     @State private var spySuspendedUntil = Date.distantPast // ignore the scroll it causes
+    @State private var viewportHeight: CGFloat = 0          // scroll viewport, for the reading line
     private static let scrollSpace = "settingsScroll"
 
     private let labelFont = Font.system(size: 12)
@@ -116,12 +117,13 @@ struct SettingsView: View {
                             cards(for: s)
                         }
                         .id(s)
-                        // Report this section's top edge in the scroll's own coordinate
-                        // space — that's what the highlight is derived from.
+                        // Report this section's edges in the scroll's own coordinate space —
+                        // that's what the highlight is derived from.
                         .background(GeometryReader { g in
+                            let f = g.frame(in: .named(Self.scrollSpace))
                             Color.clear.preference(
                                 key: SectionOffsetKey.self,
-                                value: [s: g.frame(in: .named(Self.scrollSpace)).minY])
+                                value: [s: SectionSpan(minY: f.minY, maxY: f.maxY)])
                         })
                     }
                 }
@@ -129,8 +131,14 @@ struct SettingsView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
             .coordinateSpace(name: Self.scrollSpace)
-            .onPreferenceChange(SectionOffsetKey.self) { offsets in
-                syncHighlight(with: offsets)
+            // Background reader: measures the viewport without taking part in the layout
+            // (a wrapping GeometryReader would make this column greedy — see the note on `sidebar`).
+            .background(GeometryReader { g in
+                Color.clear.preference(key: ViewportHeightKey.self, value: g.size.height)
+            })
+            .onPreferenceChange(ViewportHeightKey.self) { viewportHeight = $0 }
+            .onPreferenceChange(SectionOffsetKey.self) { spans in
+                syncHighlight(with: spans)
             }
             .onChange(of: scrollTarget) { target in
                 guard let target else { return }
@@ -160,12 +168,28 @@ struct SettingsView: View {
 
     /// Highlight the last section whose top has passed the top of the viewport — i.e. the
     /// one the user is actually reading. Ignored while a sidebar-driven scroll is running.
-    private func syncHighlight(with offsets: [SettingsSection: CGFloat]) {
-        guard Date() >= spySuspendedUntil, !offsets.isEmpty else { return }
-        let threshold: CGFloat = 24     // a section counts as "current" just before it hits the top
-        let passed = SettingsSection.allCases.filter { (offsets[$0] ?? .infinity) <= threshold }
+    ///
+    /// Plus one end-of-page rule: the last section is shorter than the page's remaining scroll,
+    /// so its top never reaches the viewport top and the plain rule left it permanently
+    /// unreachable — the sidebar stayed stuck on the section before it. Once the scroll bottoms
+    /// out, the last section is what's on screen, whatever its top edge says.
+    ///
+    /// A single "reading line" partway down the viewport would fix the last section but break
+    /// its neighbour: scrolling Permissions to the top leaves About covering most of the page,
+    /// so About would take the highlight the moment Permissions was selected.
+    private func syncHighlight(with spans: [SettingsSection: SectionSpan]) {
+        guard Date() >= spySuspendedUntil, !spans.isEmpty else { return }
+        let all = SettingsSection.allCases
+        let threshold: CGFloat = 24   // a section counts as "current" just before it hits the top
         // Nothing has passed yet → we're at the very top, on the first section.
-        let current = passed.last ?? SettingsSection.allCases.first!
+        var current = all.filter { (spans[$0]?.minY ?? .infinity) <= threshold }.last ?? all.first!
+
+        // Scrolled all the way down: the bottom-most section ends at the bottom of the viewport.
+        // `firstSpan.minY < -1` keeps this from firing when the whole page fits without scrolling.
+        if let last = all.last, let lastSpan = spans[last], let firstSpan = spans[all.first!],
+           viewportHeight > 0, firstSpan.minY < -1, lastSpan.maxY <= viewportHeight + 4 {
+            current = last
+        }
         if current != section { section = current }
     }
 
@@ -1058,12 +1082,27 @@ private struct SidebarItem: View {
     }
 }
 
-/// Top edge of each section inside the settings scroll view — drives the sidebar highlight.
+/// Vertical extent of one section inside the settings scroll view.
+private struct SectionSpan: Equatable {
+    let minY: CGFloat
+    let maxY: CGFloat
+}
+
+/// Where each section sits inside the settings scroll view — drives the sidebar highlight.
 private struct SectionOffsetKey: PreferenceKey {
-    static var defaultValue: [SettingsSection: CGFloat] = [:]
-    static func reduce(value: inout [SettingsSection: CGFloat],
-                       nextValue: () -> [SettingsSection: CGFloat]) {
+    static var defaultValue: [SettingsSection: SectionSpan] = [:]
+    static func reduce(value: inout [SettingsSection: SectionSpan],
+                       nextValue: () -> [SettingsSection: SectionSpan]) {
         value.merge(nextValue()) { _, new in new }
+    }
+}
+
+/// Height of the settings scroll viewport — the reading line is a fraction of it.
+private struct ViewportHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        let next = nextValue()
+        if next > 0 { value = next }
     }
 }
 
