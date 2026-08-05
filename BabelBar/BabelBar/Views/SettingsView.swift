@@ -186,6 +186,7 @@ struct SettingsView: View {
             }
         }
         .frame(width: 168)
+        .padding(.top, 20)   // drop the list clear of the title, instead of racing the first card
     }
 
     /// Banner shown outside the About section: says a newer version is out and jumps to it.

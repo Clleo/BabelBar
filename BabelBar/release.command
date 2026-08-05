@@ -50,11 +50,10 @@ if [ ! -d "$APP" ]; then
   exit 1
 fi
 
-# 4) Упаковать DMG в корень проекта (перетащи BabelBar в Applications).
+# 4) Упаковать оформленный DMG в корень проекта: фирменный фон,
+#    приложение слева, Applications справа, стрелка «drag and drop».
 DMG="$ROOT/BabelBar-$VER.dmg"
-ln -s /Applications "$STAGE/Applications"
-rm -f "$DMG"
-hdiutil create -volname "BabelBar" -srcfolder "$STAGE" -fs HFS+ -format UDZO -ov "$DMG" >/dev/null
+./dmg/dmg_build.sh "$APP" "$DMG" "BabelBar"
 rm -rf "$STAGE"
 
 echo ""

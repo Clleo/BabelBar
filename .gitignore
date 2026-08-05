@@ -30,6 +30,11 @@ outputs/
 # Release installers (kept on disk in the project root, not in git)
 *.dmg
 
+# Фон окна установки — генерируется из BabelBar/dmg/make_background.swift
+BabelBar/dmg/background.png
+BabelBar/dmg/background@2x.png
+BabelBar/dmg/background.tiff
+
 # CodeGraph index (local, do not commit)
 .codegraph/
 

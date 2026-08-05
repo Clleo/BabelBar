@@ -47,15 +47,18 @@ codesign -dvvv .release_build/Build/Products/Release/BabelBar.app
 `flags=0x10000(runtime)`, `Authority=Apple Development: clleoweb@gmail.com (TZ8TY6ZH56)`.
 Другого валидного identity на машине нет.
 
-**3. Собрать DMG.** Внутрь кладётся `BabelBar.app` + симлинк на `/Applications`.
-Готовые DMG лежат в корне `app/`.
+**3. Собрать DMG.** Только через `BabelBar/dmg/dmg_build.sh` — он делает оформленное
+окно установки (фирменный фон, приложение слева, `Applications` справа, стрелка
+«drag and drop»), а не голый том. Готовые DMG лежат в корне `app/`.
 
 ```bash
-STAGE=$(mktemp -d)
-cp -R .release_build/Build/Products/Release/BabelBar.app "$STAGE"/
-ln -s /Applications "$STAGE"/Applications
-hdiutil create -volname BabelBar -srcfolder "$STAGE" -ov -format UDZO ../BabelBar-<версия>.dmg
+cd app/BabelBar
+./dmg/dmg_build.sh .release_build/Build/Products/Release/BabelBar.app ../BabelBar-<версия>.dmg BabelBar
 ```
+
+Что внутри скрипта и где что править — см. `BabelBar/dmg/README.md`. Раскладку окна
+пишет Finder, поэтому нужен доступ «Автоматизация → Finder»; без него DMG соберётся
+без оформления (скрипт об этом предупредит — молча плохой образ не уедет).
 
 Альтернатива для ручного запуска: `BabelBar/release.command <версия>` делает шаги 1–3
 (но `CURRENT_PROJECT_VERSION` не трогает и релиз не публикует).
