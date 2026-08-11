@@ -9,6 +9,7 @@ enum TranscriberError: LocalizedError {
     case httpMessage(Int, String)
     case badResponse
     case modelNotReady
+    case silentInput
 
     var errorDescription: String? {
         switch self {
@@ -17,6 +18,7 @@ enum TranscriberError: LocalizedError {
         case .httpMessage(let c, let m): return "Transcription failed (HTTP \(c)): \(m)"
         case .badResponse:   return "Transcription returned no text."
         case .modelNotReady: return "Speech model is not downloaded yet."
+        case .silentInput:   return "The microphone captured only silence."
         }
     }
 }
@@ -191,6 +193,11 @@ final class DictationEngine {
         let samples = recorder.stop()
         if didDuck { SystemAudio.restore(); didDuck = false }   // bring audio back as soon as recording ends
         guard !samples.isEmpty else { completion(.success("")); return }
+        // Never hand a silent clip to Whisper — it fills the gap with training-set filler and
+        // the user gets "Thanks for watching" pasted at the cursor. Say what actually happened.
+        guard !AudioRecorder.isSilent(samples) else {
+            completion(.failure(TranscriberError.silentInput)); return
+        }
         isTranscribing = true
 
         let engine = settings.speechEngine
@@ -233,13 +240,35 @@ final class DictationEngine {
     /// which is why it lives here and not in the callers: spoken punctuation has to be resolved
     /// before the Shift+Fn transcript reaches the translator, or "запятая" gets translated as a word.
     private func postProcess(_ text: String, settings: AppSettings) async -> String {
-        guard !text.isEmpty else { return text }
+        guard !text.isEmpty, !Self.isFiller(text) else { return "" }
         var out = text
-        if settings.voiceCommandsEnabled { out = VoiceCommands.apply(to: out) }
+        // Voice commands must never eat the whole transcript: "точка" spoken on its own resolves
+        // to a mark with nothing to attach to, and the result would be an empty insertion.
+        if settings.voiceCommandsEnabled {
+            let resolved = VoiceCommands.apply(to: out)
+            if !resolved.isEmpty { out = resolved }
+        }
         if settings.dictationCleanupEnabled, let aiCleanup, !out.isEmpty {
             out = await aiCleanup(out, settings)
         }
         return out
+    }
+
+    /// Whisper's stock output for near-silence: closing lines from the YouTube captions it was
+    /// trained on. The silence guard in `finish` catches the digitally-dead case, but a clip
+    /// that is merely too quiet still comes back as one of these, so drop it when it is the
+    /// *entire* transcript — as a substring these are all legitimate things to dictate.
+    private static let fillerPhrases: Set<String> = [
+        "thanks for watching", "thank you for watching", "thanks for watching!",
+        "please subscribe", "subscribe to my channel", "you",
+        "продолжение следует", "субтитры сделал dimatorzok", "субтитры создавал dimatorzok",
+        "редактор субтитров а.синецкая корректор а.егорова", "спасибо за просмотр",
+    ]
+
+    private static func isFiller(_ text: String) -> Bool {
+        let key = text.lowercased()
+            .trimmingCharacters(in: CharacterSet(charactersIn: " .,!?…\n\t"))
+        return key.isEmpty || fillerPhrases.contains(key)
     }
 
     private func localTranscriber(variant: String) -> LocalWhisperTranscriber {

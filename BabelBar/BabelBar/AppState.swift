@@ -463,7 +463,11 @@ final class AppState: ObservableObject {
                 // The app window is hidden during cursor dictation — surface the failure
                 // in the pill itself, or the user just sees the overlay silently vanish.
                 self.errorMessage = e.localizedDescription
-                RecordingOverlay.shared.showError(self.t(.errDictation))
+                // A silent clip is the one failure the user can act on, so name it in the pill
+                // instead of the generic "dictation failed".
+                let silent: Bool
+                if case .silentInput? = e as? TranscriberError { silent = true } else { silent = false }
+                RecordingOverlay.shared.showError(self.t(silent ? .errSilence : .errDictation))
             default:
                 RecordingOverlay.shared.hide()
             }
@@ -486,7 +490,11 @@ final class AppState: ObservableObject {
                 self.translateForCursor(text)        // keeps the overlay up until the result is typed
             case .failure(let e):
                 self.errorMessage = e.localizedDescription
-                RecordingOverlay.shared.showError(self.t(.errDictation))
+                // A silent clip is the one failure the user can act on, so name it in the pill
+                // instead of the generic "dictation failed".
+                let silent: Bool
+                if case .silentInput? = e as? TranscriberError { silent = true } else { silent = false }
+                RecordingOverlay.shared.showError(self.t(silent ? .errSilence : .errDictation))
             default:
                 RecordingOverlay.shared.hide()
             }

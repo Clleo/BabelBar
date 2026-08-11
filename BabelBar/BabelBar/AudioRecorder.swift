@@ -4,7 +4,8 @@ import AVFoundation
 /// Unlike streaming recognition, we record the whole utterance and transcribe it on stop,
 /// so the end of the phrase is never cut off. Drives `MicLevel` for the recording waveform.
 final class AudioRecorder {
-    private let engine = AVAudioEngine()
+    /// Built fresh for every recording — see the comment in `start()`.
+    private var engine: AVAudioEngine?
     private var converter: AVAudioConverter?
     private let targetFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32,
                                              sampleRate: 16_000, channels: 1, interleaved: false)!
@@ -20,6 +21,16 @@ final class AudioRecorder {
         lock.lock(); samples.removeAll(); lock.unlock()
         MicLevel.shared.reset()
 
+        // A NEW engine per recording. Keeping one AVAudioEngine for the life of the app is how
+        // dictation goes silent: `inputNode` binds to a private aggregate device
+        // (`CADefaultDeviceAggregate-<pid>`) the first time it is materialized, and after any
+        // route change — headphones, an output switch, a Continuity mic appearing — the engine
+        // keeps running while the tap receives zero-filled buffers. The clip then has exactly
+        // the right length and no sound in it, so Whisper answers with its silence
+        // hallucinations ("Thanks for watching", a bare "."), which is what the user sees
+        // inserted. Rebuilding the graph costs milliseconds and always binds to the devices
+        // that are current *now*.
+        let engine = AVAudioEngine()
         let input = engine.inputNode
         let inFormat = input.outputFormat(forBus: 0)
         converter = AVAudioConverter(from: inFormat, to: targetFormat)
@@ -29,6 +40,7 @@ final class AudioRecorder {
         }
         engine.prepare()
         try engine.start()
+        self.engine = engine
         isRecording = true
     }
 
@@ -56,10 +68,12 @@ final class AudioRecorder {
     /// Stop capturing and return the recorded 16 kHz mono samples.
     @discardableResult
     func stop() -> [Float] {
-        if engine.isRunning {
-            engine.stop()
+        if let engine {
+            if engine.isRunning { engine.stop() }
             engine.inputNode.removeTap(onBus: 0)
         }
+        engine = nil          // the next recording builds its own, bound to the current devices
+        converter = nil
         isRecording = false
         MicLevel.shared.reset()
         lock.lock(); let s = samples; samples.removeAll(); lock.unlock()
@@ -67,6 +81,18 @@ final class AudioRecorder {
     }
 
     func cancel() { stop() }
+
+    /// True when the clip carries no speech at all. Sending digital silence to Whisper is worse
+    /// than sending nothing: it answers with training-set filler ("Thanks for watching",
+    /// "Продолжение следует…", a lone "."), which then gets inserted as if it were dictation.
+    /// The threshold sits far below quiet speech (RMS ≈ 0.01…0.05) and above the noise floor of
+    /// a muted or dead input (≈ 1e-5), so only a truly silent clip trips it.
+    static func isSilent(_ samples: [Float]) -> Bool {
+        guard !samples.isEmpty else { return true }
+        var sum: Float = 0
+        for s in samples { sum += s * s }
+        return (sum / Float(samples.count)).squareRoot() < 0.0015
+    }
 
     /// Perceptual 0…1 input level from a PCM buffer (RMS with gain) — drives the recording
     /// waveform. Runs on the audio thread, so keep it cheap.
