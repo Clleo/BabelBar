@@ -51,7 +51,8 @@ enum LKey: String {
     case clear, voiceInputTip, forQuickCopy, insertTranslation
     case recordKeys, recordModifiers
     // Errors & status-bar menu
-    case errMicSpeech, errDictation, errSilence, errTranslationOriginal, menuShow, menuSettings, menuQuit
+    case errMicSpeech, errDictation, errSilence, errCapture
+    case errTranslationOriginal, menuShow, menuSettings, menuQuit
     // Speech engine section
     case secSpeech, recognition, engineLocal, engineRemote
     case download, downloading, modelReady, downloaded, initializing, insertion, insertPaste, insertType
@@ -288,6 +289,13 @@ enum Loc {
                         "Rien n’a été entendu — vérifiez le microphone",
                         "Non si sente nulla — controlla il microfono",
                         "Nada foi ouvido — verifique o microfone"),
+        .errCapture: r("Microphone is sending broken audio",
+                        "Микрофон отдаёт битый звук",
+                        "Mikrofon liefert fehlerhaften Ton",
+                        "El micrófono envía audio dañado",
+                        "Le microphone envoie un son corrompu",
+                        "Il microfono invia audio corrotto",
+                        "O microfone está enviando áudio corrompido"),
         .errTranslationOriginal: r("Translation failed — inserted original",
                         "Перевод не удался — вставлен оригинал",
                         "Übersetzung fehlgeschlagen — Original eingefügt",

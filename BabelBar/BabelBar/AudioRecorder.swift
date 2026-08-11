@@ -13,6 +13,12 @@ final class AudioRecorder {
     private let lock = NSLock()
     private(set) var isRecording = false
 
+    private var startedAt: Date?
+    /// Seconds of audio the last clip contains, divided by the seconds the recording actually ran.
+    /// A healthy capture sits at ~1.0.
+    private(set) var lastCaptureRatio: Double = 1
+    private(set) var lastWallDuration: TimeInterval = 0
+
     /// Begin capturing. Throws if the audio engine can't start.
     func start() throws {
         // A second start (e.g. cursor dictation while the in-app mic is already recording)
@@ -21,15 +27,11 @@ final class AudioRecorder {
         lock.lock(); samples.removeAll(); lock.unlock()
         MicLevel.shared.reset()
 
-        // A NEW engine per recording. Keeping one AVAudioEngine for the life of the app is how
-        // dictation goes silent: `inputNode` binds to a private aggregate device
-        // (`CADefaultDeviceAggregate-<pid>`) the first time it is materialized, and after any
-        // route change — headphones, an output switch, a Continuity mic appearing — the engine
-        // keeps running while the tap receives zero-filled buffers. The clip then has exactly
-        // the right length and no sound in it, so Whisper answers with its silence
-        // hallucinations ("Thanks for watching", a bare "."), which is what the user sees
-        // inserted. Rebuilding the graph costs milliseconds and always binds to the devices
-        // that are current *now*.
+        // A NEW engine per recording. `inputNode` binds to a private aggregate device
+        // (`CADefaultDeviceAggregate-<pid>`) the first time it is materialized and holds on to
+        // that binding, so an engine kept for the life of the app outlives every route change —
+        // headphones, an output switch, a Continuity mic appearing. Rebuilding the graph costs
+        // milliseconds and always binds to the devices that are current *now*.
         let engine = AVAudioEngine()
         let input = engine.inputNode
         let inFormat = input.outputFormat(forBus: 0)
@@ -41,6 +43,7 @@ final class AudioRecorder {
         engine.prepare()
         try engine.start()
         self.engine = engine
+        startedAt = Date()
         isRecording = true
     }
 
@@ -77,10 +80,32 @@ final class AudioRecorder {
         isRecording = false
         MicLevel.shared.reset()
         lock.lock(); let s = samples; samples.removeAll(); lock.unlock()
+
+        lastWallDuration = startedAt.map { Date().timeIntervalSince($0) } ?? 0
+        lastCaptureRatio = lastWallDuration > 0
+            ? Double(s.count) / targetFormat.sampleRate / lastWallDuration
+            : 1
+        startedAt = nil
         return s
     }
 
     func cancel() { stop() }
+
+    /// True when the clip's own length disagrees with how long the recording actually ran, which
+    /// means the input device is not delivering audio on a real timeline. Seen in the wild on a
+    /// built-in microphone that handed out every block about five times over, timestamps to
+    /// match: 2 s of speech arrived as 9.5 s of audio. Every capture API on that machine saw it
+    /// and restarting `coreaudiod` did not clear it. Such a clip is speech stretched past
+    /// recognition — Whisper finds no words in it and answers with subtitle credits
+    /// ("Undertexter av …") or "Thank you.", which then lands at the cursor as if it were the
+    /// dictation. Better to name the fault than to insert its invention.
+    ///
+    /// The window is deliberately wide: a healthy capture sits at 1.0 and normal jitter or a
+    /// dropped buffer never approaches these edges. Very short taps are exempt — start-up latency
+    /// dominates them and the ratio means nothing.
+    var captureLooksBroken: Bool {
+        lastWallDuration >= 0.6 && (lastCaptureRatio > 1.5 || lastCaptureRatio < 0.5)
+    }
 
     /// True when the clip carries no speech at all. Sending digital silence to Whisper is worse
     /// than sending nothing: it answers with training-set filler ("Thanks for watching",

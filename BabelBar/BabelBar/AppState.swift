@@ -465,9 +465,14 @@ final class AppState: ObservableObject {
                 self.errorMessage = e.localizedDescription
                 // A silent clip is the one failure the user can act on, so name it in the pill
                 // instead of the generic "dictation failed".
-                let silent: Bool
-                if case .silentInput? = e as? TranscriberError { silent = true } else { silent = false }
-                RecordingOverlay.shared.showError(self.t(silent ? .errSilence : .errDictation))
+                // Name the two failures the user can act on; everything else stays generic.
+                let key: LKey
+                switch e as? TranscriberError {
+                case .silentInput?:    key = .errSilence
+                case .brokenCapture?:  key = .errCapture
+                default:               key = .errDictation
+                }
+                RecordingOverlay.shared.showError(self.t(key))
             default:
                 RecordingOverlay.shared.hide()
             }
@@ -492,9 +497,14 @@ final class AppState: ObservableObject {
                 self.errorMessage = e.localizedDescription
                 // A silent clip is the one failure the user can act on, so name it in the pill
                 // instead of the generic "dictation failed".
-                let silent: Bool
-                if case .silentInput? = e as? TranscriberError { silent = true } else { silent = false }
-                RecordingOverlay.shared.showError(self.t(silent ? .errSilence : .errDictation))
+                // Name the two failures the user can act on; everything else stays generic.
+                let key: LKey
+                switch e as? TranscriberError {
+                case .silentInput?:    key = .errSilence
+                case .brokenCapture?:  key = .errCapture
+                default:               key = .errDictation
+                }
+                RecordingOverlay.shared.showError(self.t(key))
             default:
                 RecordingOverlay.shared.hide()
             }

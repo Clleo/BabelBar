@@ -10,6 +10,7 @@ enum TranscriberError: LocalizedError {
     case badResponse
     case modelNotReady
     case silentInput
+    case brokenCapture(ratio: Double)
 
     var errorDescription: String? {
         switch self {
@@ -19,6 +20,10 @@ enum TranscriberError: LocalizedError {
         case .badResponse:   return "Transcription returned no text."
         case .modelNotReady: return "Speech model is not downloaded yet."
         case .silentInput:   return "The microphone captured only silence."
+        case .brokenCapture(let r):
+            return String(format: "The microphone delivered %.1f× more audio than the recording "
+                          + "lasted, so the speech in it is unusable. Switch the input device in "
+                          + "System Settings › Sound, or restart the Mac.", r)
         }
     }
 }
@@ -193,8 +198,13 @@ final class DictationEngine {
         let samples = recorder.stop()
         if didDuck { SystemAudio.restore(); didDuck = false }   // bring audio back as soon as recording ends
         guard !samples.isEmpty else { completion(.success("")); return }
-        // Never hand a silent clip to Whisper — it fills the gap with training-set filler and
-        // the user gets "Thanks for watching" pasted at the cursor. Say what actually happened.
+        // Never hand Whisper a clip it cannot get words out of — it fills the gap with
+        // training-set filler and the user gets "Thanks for watching" pasted at the cursor.
+        // Say what actually happened instead.
+        guard !recorder.captureLooksBroken else {
+            completion(.failure(TranscriberError.brokenCapture(ratio: recorder.lastCaptureRatio)))
+            return
+        }
         guard !AudioRecorder.isSilent(samples) else {
             completion(.failure(TranscriberError.silentInput)); return
         }
