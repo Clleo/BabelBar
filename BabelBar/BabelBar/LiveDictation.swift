@@ -21,7 +21,10 @@ struct LiveTranscript {
     private var frozenPrefix: [String] = []
     private var lastWords: [String] = []
 
-    mutating func update(_ text: String, timed: [LiveSpeechWord], correct: (String) -> String) {
+    /// `correctSpan` corrects a span that continues already committed text (a line
+    /// break command may open it); it defaults to `correct`.
+    mutating func update(_ text: String, timed: [LiveSpeechWord], correct: (String) -> String,
+                         correctSpan: ((String) -> String)? = nil) {
         let canonical = Self.words(correct(text))
         let content = Self.withoutReplay(canonical, history: history)
         lastWords = content
@@ -29,7 +32,10 @@ struct LiveTranscript {
         latestEnd = validTiming ? timed.last?.end : nil
         if validTiming, let through {
             let fresh = timed.filter { ($0.start + $0.end) / 2 > through + 0.01 }
-            volatile = correct(fresh.map(\.text).joined(separator: " "))
+            let joined = fresh.map(\.text).joined(separator: " ")
+            if committed.isEmpty { volatile = correct(joined) }
+            else if let correctSpan { volatile = correctSpan(joined) }
+            else { volatile = correct(joined) }
         } else {
             let offset = Self.prefixBoundary(frozenPrefix, in: content)
             volatile = content.dropFirst(offset).joined(separator: " ")
@@ -57,7 +63,7 @@ struct LiveTranscript {
     var target: String { Self.join(committed, volatile) }
     static func join(_ a: String, _ b: String) -> String {
         guard !a.isEmpty, !b.isEmpty else { return a.isEmpty ? b : a }
-        return a.hasSuffix("\n") ? a + b : a + " " + b
+        return a.hasSuffix("\n") || b.hasPrefix("\n") ? a + b : a + " " + b
     }
     static func words(_ s: String) -> [String] { s.components(separatedBy: " ").filter { !$0.isEmpty } }
     static func key(_ s: String) -> String {
@@ -366,10 +372,13 @@ final class LiveDictationController {
     private func ingest(_ text: String, timed: [LiveSpeechWord], final: Bool) {
         lastPartial = Date()
         let rules = self.rules, commands = settings?.voiceCommandsEnabled == true
-        transcript.update(text, timed: timed) {
+        transcript.update(text, timed: timed, correct: {
             let result = TranscriptCorrector.correct($0, rules: rules)
             return commands ? VoiceCommands.applyInline(to: result) : result
-        }
+        }, correctSpan: {
+            let result = TranscriptCorrector.correct($0, rules: rules)
+            return commands ? VoiceCommands.applyInline(to: result, followsText: true) : result
+        })
         freezeTimer?.cancel()
         if final { freeze(); return }
         typer.render(target: transcript.target, frozen: transcript.committed.count)

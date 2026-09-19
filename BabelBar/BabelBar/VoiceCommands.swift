@@ -38,6 +38,12 @@ enum VoiceCommands {
         ["новая", "строка"]:        .newline(1),
         ["с", "красной", "строки"]: .newline(2),
         ["новый", "абзац"]:         .newline(2),
+        ["перенос", "строки"]:      .newline(1),
+        ["перевод", "строки"]:      .newline(1),
+        ["на", "новую", "строку"]:  .newline(1),
+        ["абзац"]:                  .newline(2),
+        ["с", "нового", "абзаца"]:  .newline(2),
+        ["новый", "параграф"]:      .newline(2),
         // English
         ["period"]:                 .punct("."),
         ["full", "stop"]:           .punct("."),
@@ -53,6 +59,10 @@ enum VoiceCommands {
         ["new", "line"]:            .newline(1),
         ["newline"]:                .newline(1),
         ["new", "paragraph"]:       .newline(2),
+        ["line", "break"]:          .newline(1),
+        ["next", "line"]:           .newline(1),
+        ["paragraph"]:              .newline(2),
+        ["paragraph", "break"]:     .newline(2),
     ]
 
     /// Characters Whisper glues to a word and that a command must not carry with it.
@@ -73,7 +83,9 @@ enum VoiceCommands {
     /// replacement, but never re-cases or trims — the span is usually
     /// mid-sentence, and the live typer's diff must see only real changes.
     /// Line breaks pass through to the typer as ordinary characters.
-    static func applyInline(to text: String) -> String {
+    /// `followsText`: the span continues text that is already in the field, so a
+    /// line break may open it even though nothing precedes it inside the span.
+    static func applyInline(to text: String, followsText: Bool = false) -> String {
         let tokens = text.split(whereSeparator: \.isWhitespace).map(String.init)
         guard !tokens.isEmpty else { return text }
         let cores = tokens.map(core)
@@ -89,7 +101,7 @@ enum VoiceCommands {
             while length > 0 {
                 let phrase = Array(cores[i ..< i + length])
                 if !phrase.contains(where: \.isEmpty),
-                   let mark = table[phrase], emitInline(mark, into: &out) {
+                   let mark = table[phrase], emitInline(mark, into: &out, followsText: followsText) {
                     i += length
                     matched = true
                     break
@@ -97,7 +109,7 @@ enum VoiceCommands {
                 length -= 1
             }
             if !matched {
-                out += out.isEmpty ? tokens[i] : " " + tokens[i]
+                out += (out.isEmpty || out.hasSuffix("\n")) ? tokens[i] : " " + tokens[i]
                 i += 1
             }
         }
@@ -106,12 +118,12 @@ enum VoiceCommands {
 
     /// Emits the mark; false when there is nothing to attach it to, so the
     /// caller keeps the spoken words as text (live spans often begin mid-sentence).
-    private static func emitInline(_ mark: Mark, into out: inout String) -> Bool {
+    private static func emitInline(_ mark: Mark, into out: inout String, followsText: Bool) -> Bool {
         switch mark {
         case .punct:
             guard !out.isEmpty, !out.hasSuffix("\n") else { return false }
         case .newline:
-            guard !out.isEmpty else { return false }
+            guard !out.isEmpty || followsText else { return false }
         default:
             break
         }

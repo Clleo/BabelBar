@@ -16,7 +16,7 @@ modifier=voice[voice.index('struct ModifierCombo'):voice.index('enum VoiceAction
 PY
 swiftc -parse-as-library -module-cache-path "$review_dir/cache" \
   "$repo_dir/BabelBar/LiveTyper.swift" "$repo_dir/BabelBar/Dictionaries.swift" \
-  "$repo_dir/BabelBar/Localization.swift" "$repo_dir/BabelBar/KeyCombo.swift" \
+  "$repo_dir/BabelBar/Localization.swift" "$repo_dir/BabelBar/KeyCombo.swift" "$repo_dir/BabelBar/VoiceCommands.swift" \
   "$review_dir/Core.swift" "$repo_dir/Tests/DictationRegressionTests.swift" \
   -o "$review_dir/regressions"
 "$review_dir/regressions"

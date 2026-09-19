@@ -106,6 +106,20 @@ struct DictationRegressionTests {
         timed.update("два три", timed: [LiveSpeechWord(text:"два",start:1,end:2), LiveSpeechWord(text:"три",start:2,end:3)], correct: {$0})
         check(timed.target == "один два три", "audio timestamps suppress overlapping replay")
 
+        for phrase in ["перенос строки", "с новой строки", "на новую строку", "перевод строки", "new line", "line break"] {
+            check(VoiceCommands.applyInline(to: "привет \(phrase) мир") == "привет\nмир", "line command: \(phrase)")
+        }
+        for phrase in ["абзац", "новый абзац", "с нового абзаца", "new paragraph", "paragraph"] {
+            check(VoiceCommands.applyInline(to: "привет \(phrase) мир") == "привет\n\nмир", "paragraph command: \(phrase)")
+        }
+        check(VoiceCommands.applyInline(to: "с новой строки мир", followsText: true) == "\nмир", "line command opens a span that continues committed text")
+        check(VoiceCommands.applyInline(to: "абзац") == "абзац", "leading command with nothing before it stays text")
+        var lines = LiveTranscript()
+        lines.update("привет", timed: [LiveSpeechWord(text:"привет",start:0,end:1)], correct: {$0}); lines.freeze()
+        lines.update("привет с новой строки мир", timed: [LiveSpeechWord(text:"привет",start:0,end:1), LiveSpeechWord(text:"с",start:1,end:1.2), LiveSpeechWord(text:"новой",start:1.2,end:1.5), LiveSpeechWord(text:"строки",start:1.5,end:2), LiveSpeechWord(text:"мир",start:2,end:2.5)],
+                     correct: { VoiceCommands.applyInline(to: $0) }, correctSpan: { VoiceCommands.applyInline(to: $0, followsText: true) })
+        check(lines.target == "привет\nмир", "line command after a pause joins without a stray space")
+
         let personal = DictEntry(spoken: "некст джей эс", written: "MyFramework")
         check(TranscriptCorrector.correct("некст джей эс", rules: [personal] + rules) == "MyFramework", "personal dictionary priority")
         check(DictionaryContext.contextualStrings(personal: [], developerEnabled: false, frequencyEnabled: false).isEmpty, "disabled dictionary/context returns no hints")
