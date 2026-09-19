@@ -89,8 +89,9 @@ final class AppleSpeechStreamer: StreamingRecognizer {
         t?.cancel()
     }
 
-    /// Replace the current request on the controller's initiative (the controller
-    /// hit a mapping conflict it resolves by starting a fresh utterance).
+    /// Replace the current request on the controller's initiative — kept for
+    /// future use (the mapping no longer needs it: revisions can't desync the
+    /// span anymore).
     func restartNow() {
         DispatchQueue.main.async { [weak self] in
             guard let self, self.wantsAudio else { return }
@@ -197,17 +198,16 @@ final class LiveDictationController {
 
     // Transcript mapping (raw = what the recognizer said, uncorrected).
     //
-    //   settledTokens        — raw tokens of COMPLETED recognition requests (append-only;
-    //                          the current request's utterance is NOT in here, because its
-    //                          transcript is cumulative and still growing).
-    //   lastUtteranceTokens  — the current request's latest utterance.
-    //   printedTokens        — everything asked of the typer so far; in the normal flow it is
-    //                          exactly (settledTokens + lastUtteranceTokens) truncated at the
-    //                          newest render.
-    //   frozenCount          — printedTokens[0..<frozenCount] are frozen: never revised again.
+    //   settledTokens  — raw tokens of COMPLETED recognition requests (append-only).
+    //   frozenCount    — offset into (settledTokens + current utterance): everything
+    //                    before it is frozen. The volatile span is simply everything
+    //                    AFTER it — however the recognizer re-cases or re-punctuates
+    //                    earlier words, the span only changes by its own content, so
+    //                    the printed text can never be mass-erased by a revision.
+    //                    (Revisions of already-frozen words are ignored — frozen is
+    //                    frozen, TZ §16.)
     private var settledTokens: [String] = []
     private var lastUtteranceTokens: [String] = []
-    private var printedTokens: [String] = []
     private var frozenCount = 0
     /// Frozen, corrected text — exactly what the field shows before the volatile
     /// tail (the typer renders `committedText + " " + volatile` as one string).
@@ -308,7 +308,6 @@ final class LiveDictationController {
         typer.reset()
         settledTokens = []
         lastUtteranceTokens = []
-        printedTokens = []
         frozenCount = 0
         committedText = ""
         volatileCorrected = ""
@@ -346,38 +345,23 @@ final class LiveDictationController {
         phase = .listening
     }
 
-    /// New recognition result. Maps the cumulative transcript onto what is
-    /// already printed, corrects the volatile span through the dictionaries and
-    /// hands the target state to the typer.
+    /// New recognition result. The volatile span is everything the recognizer
+    /// has said since the frozen boundary; it is corrected through the
+    /// dictionaries and rendered with the trailing word held back.
     private func ingest(utterance: String, isFinal: Bool) {
         guard phase == .listening || phase == .finishing else { return }
         let utteranceTok = Self.tokens(utterance)
         lastUtteranceTokens = utteranceTok
-        let full = settledTokens + utteranceTok
-        let p = Self.commonPrefixNorm(printedTokens, full)
 
-        if p < frozenCount {
-            // Rare: the recognizer revised already-frozen words. We never delete
-            // frozen text (TZ §16) and we never duplicate it either — so the
-            // revision is dropped: everything printed is declared final, the
-            // mapping realigns to the recognizer's own history, and recognition
-            // continues with a fresh request so future speech arrives cleanly.
-            freezeCurrentVolatile()
-            settledTokens += lastUtteranceTokens
-            lastUtteranceTokens = []
-            printedTokens = settledTokens
-            frozenCount = printedTokens.count
-            streamer?.restartNow()
-            return
-        }
-        if p < printedTokens.count {
-            // The revision touched only the volatile territory: shrink the
-            // printed mapping — the typer's own diff backspaces the replaced tail.
-            printedTokens.removeSubrange(p...)
-        }
-        let novel = Array(full.dropFirst(p))
-        printedTokens.append(contentsOf: novel)
-        let corrected = TranscriptCorrector.correct(novel.joined(separator: " "), rules: rules)
+        // Span = utterance tokens after the frozen boundary. NB: deliberately NOT
+        // "tokens the previous partial didn't contain" — the recognizer routinely
+        // re-cases and re-punctuates earlier words ("как" → "Как,"), and diffing
+        // against a normalized prefix made those revisions look like "nothing
+        // new", wiping the whole span. A whole-span rebuild makes them plain
+        // small string edits instead.
+        let startInUtterance = max(0, frozenCount - settledTokens.count)
+        let spanTokens = Array(utteranceTok.dropFirst(startInUtterance))
+        let corrected = TranscriptCorrector.correct(spanTokens.joined(separator: " "), rules: rules)
         // Apple Speech (addsPunctuation) often capitalizes a sentence's first word
         // only after the partial was already printed — chasing that case change
         // would erase and retype the whole volatile span at every sentence start.
@@ -462,7 +446,7 @@ final class LiveDictationController {
     private func freezeCurrentVolatile() {
         freezeTimer?.cancel(); freezeTimer = nil
         settleTimer?.cancel(); settleTimer = nil
-        frozenCount = printedTokens.count
+        frozenCount = settledTokens.count + lastUtteranceTokens.count
         let span = volatileCorrected
         volatileCorrected = ""
         lastVolatileChangeAt = Date.distantPast
@@ -541,23 +525,10 @@ final class LiveDictationController {
         }
     }
 
-    // MARK: - Token mapping helpers
+    // MARK: - Token helpers
 
     private static func tokens(_ text: String) -> [String] {
         text.split(whereSeparator: \.isWhitespace).map(String.init)
-    }
-
-    /// Comparable form of a raw token (same normalization as VoiceCommands).
-    private static func core(_ token: String) -> String {
-        token.lowercased()
-            .replacingOccurrences(of: "ё", with: "е")
-            .trimmingCharacters(in: CharacterSet(charactersIn: ".,;:!?…—-«»\"'()"))
-    }
-
-    private static func commonPrefixNorm(_ a: [String], _ b: [String]) -> Int {
-        var n = 0
-        while n < a.count, n < b.count, core(a[n]) == core(b[n]) { n += 1 }
-        return n
     }
 
     private static func frontmostBundleID() -> String {
