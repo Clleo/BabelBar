@@ -5,18 +5,18 @@ import Carbon.HIToolbox
 //  Live typing engine for streaming dictation (v3.0).
 //
 //  Prints recognition results straight into the frontmost app's text field as
-//  they arrive, revising ONLY the volatile (not-yet-final) tail:
+//  they arrive, revising only the not-yet-frozen tail:
 //
-//    committed — typed and frozen. Never touched again: earlier sentences and
-//                anything the user edited by hand are untouchable (TZ §5, §16).
-//    volatile  — typed but replaceable. A new partial result rewrites it by
-//                erasing the differing tail with backspace events and typing
-//                the new one. Backspaces never go past what we typed ourselves.
+//    target (String) — the FULL desired text of this dictation session, from
+//                      its first character to the current cursor position.
+//    frozen (Int)    — how many leading Characters may never be backspaced:
+//                      earlier sentences and everything the controller froze.
 //
-//  Rendering is diff-based (only the difference is typed/erased, so the visible
-//  text stays stable and event traffic stays small) and coalesced: partial
-//  results that arrive while a render is in flight collapse into the newest
-//  one, throttled to a minimum interval between renders.
+//  Rendering is a single diff of (what's on screen) vs (target): only the
+//  difference is erased with backspaces and re-typed, so the visible text
+//  stays stable and event traffic stays small. Updates are coalesced (a
+//  minimum interval between renders; intermediate states collapse into the
+//  newest one) and serialized on a private queue.
 //
 //  Every synthetic event has its flags cleared — same contract as
 //  `CursorTyping`: while the dictation hotkey is still held (⌘Fn), a stray
@@ -29,21 +29,19 @@ final class LiveTyper {
 
     private let queue = DispatchQueue(label: "com.babelbar.livetyper", qos: .userInitiated)
 
-    // Rendered state (queue-confined): what is physically in the text field now.
-    private var committed = ""
-    private var typedVolatile = ""
+    // Rendered state (queue-confined): what is physically in the field now.
+    private var screen = ""
+    private var frozenLen = 0
 
     // Newest desired state (written from the main thread, read on the queue).
-    private var latestCommitted = ""
-    private var latestVolatile = ""
+    private var latestTarget = ""
+    private var latestFrozen = 0
 
     private var scheduled = false
     private var lastRenderAt = Date.distantPast
     /// Minimum spacing between renders — fast partial updates collapse instead
     /// of hammering the target app with events.
     private let minRenderInterval: TimeInterval = 0.15
-    /// Backspaces per second are capped implicitly by this pacing between events.
-    private let keyEventPauseUs: useconds_t = 1200
     private let typingChunkSize = 16   // UTF-16 units per event, as in CursorTyping
 
     // MARK: - Public API (main thread)
@@ -51,43 +49,32 @@ final class LiveTyper {
     /// Start a fresh session: forget everything printed before.
     func reset() {
         queue.async {
-            self.committed = ""
-            self.typedVolatile = ""
-            self.latestCommitted = ""
-            self.latestVolatile = ""
+            self.screen = ""
+            self.frozenLen = 0
+            self.latestTarget = ""
+            self.latestFrozen = 0
         }
     }
 
-    /// Target state for the field: `committed` must only ever grow (the caller
-    /// guarantees it — committed text is frozen by contract); `volatile` may be
-    /// rewritten freely.
-    func render(committed c: String, volatile v: String) {
+    /// Full desired session text, and how many leading Characters are frozen
+    /// (the caller guarantees the frozen prefix of `target` never changes —
+    /// so the typer will never backspace into it).
+    func render(target: String, frozen: Int) {
         queue.async {
-            self.latestCommitted = c
-            self.latestVolatile = v
+            self.latestTarget = target
+            self.latestFrozen = frozen
             self.scheduleNextRender()
         }
     }
 
-    /// Stop revising whatever is typed: the volatile tail becomes committed as
-    /// printed. Used when the target app/field changes (TZ §16) — from that
+    /// Stop revising whatever is on screen: everything typed so far becomes
+    /// frozen. Used when the target app/field changes (TZ §16) — from that
     /// moment BabelBar never sends a backspace into the old field again.
-    func freezeVolatile() {
+    func freezeAll() {
         queue.async {
-            guard !self.typedVolatile.isEmpty else { return }
-            self.committed += self.typedVolatile
-            self.typedVolatile = ""
-            self.latestCommitted = self.committed
-            self.latestVolatile = ""
-        }
-    }
-
-    /// Everything this session has typed so far (committed + volatile), for
-    /// correction learning. Async — the completion runs on the main thread.
-    func typedText(_ completion: @escaping (String) -> Void) {
-        queue.async {
-            let text = self.committed + self.typedVolatile
-            DispatchQueue.main.async { completion(text) }
+            self.frozenLen = self.screen.count
+            self.latestFrozen = self.frozenLen
+            self.latestTarget = self.screen
         }
     }
 
@@ -105,34 +92,27 @@ final class LiveTyper {
     }
 
     private func performRender() {
-        let targetC = latestCommitted
-        let targetV = latestVolatile
+        let target = latestTarget
+        let frozen = min(latestFrozen, screen.count)
 
-        // Committed text is grow-only. A non-append change would mean the caller
-        // rewrote history — we keep what's printed and ignore it (never delete
-        // frozen text; TZ §16: never damage user text for a recognition fix).
-        if targetC != committed {
-            if targetC.hasPrefix(committed) {
-                type(String(targetC.dropFirst(committed.count)))
-                committed = targetC
-            } else {
-                NSLog("BabelBar LiveTyper: non-append committed change ignored")
-                latestCommitted = committed   // don't fight the caller forever
-            }
-        }
+        // Chars of the current screen that survive: the common prefix, but
+        // never less than the frozen boundary (a target that disagrees with
+        // frozen text loses — the screen keeps its version; TZ §16).
+        let prefix = Self.commonPrefixLength(screen, target)
+        let keep = max(prefix, frozen)
 
-        // Volatile: replace the differing tail — common prefix stays on screen.
-        if targetV != typedVolatile {
-            let prefix = Self.commonPrefixLength(typedVolatile, targetV)
-            let deleteCount = typedVolatile.count - prefix
-            let insert = String(targetV.dropFirst(prefix))
-            if deleteCount > 0 { backspace(deleteCount) }
-            if !insert.isEmpty { type(insert) }
-            typedVolatile = targetV
+        if keep < screen.count {
+            backspace(screen.count - keep)
         }
+        let survivor = String(screen.prefix(keep))
+        let suffix = String(target.dropFirst(keep))
+        if !suffix.isEmpty {
+            type(suffix)
+        }
+        screen = survivor + suffix
 
         lastRenderAt = Date()
-        if latestCommitted != targetC || latestVolatile != targetV {
+        if latestTarget != target || min(latestFrozen, screen.count) != frozen {
             scheduleNextRender()   // a newer target arrived while we were typing
         }
     }
@@ -173,7 +153,7 @@ final class LiveTyper {
             up.flags = []
             down.post(tap: .cghidEventTap)
             up.post(tap: .cghidEventTap)
-            usleep(keyEventPauseUs)
+            usleep(1200)
         }
     }
 

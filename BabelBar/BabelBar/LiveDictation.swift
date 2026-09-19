@@ -209,13 +209,27 @@ final class LiveDictationController {
     private var lastUtteranceTokens: [String] = []
     private var printedTokens: [String] = []
     private var frozenCount = 0
-    private var correctedCommitted = ""        // corrected text of the frozen part
+    /// Frozen, corrected text — exactly what the field shows before the volatile
+    /// tail (the typer renders `committedText + " " + volatile` as one string).
+    private var committedText = ""
     private var volatileCorrected = ""         // corrected text currently shown as volatile
 
     private var freezeTimer: DispatchWorkItem?
     /// How long a speech pause freezes the volatile tail (TZ §6: pause → edit →
     /// continue must be safe; hand edits are never overwritten).
     private let freezeDelay: TimeInterval = 1.4
+
+    // Trailing-word stability. Apple Speech revises its NEWEST word constantly
+    // ("мир" → "мир," → another word entirely), and printing every revision made
+    // the last word visibly appear/disappear in a loop. The trailing word is
+    // therefore held back until one of: a newer word follows it, it stays
+    // unchanged for `wordSettleDelay`, or the span freezes. In continuous
+    // speech this costs about one word of latency; a pause releases it in
+    /// ~0.45 s; freeze always releases everything.
+    private var lastVolatileChangeAt = Date.distantPast
+    private let wordSettleDelay: TimeInterval = 0.45
+    private var settleTimer: DispatchWorkItem?
+
     private var appObserver: Any?
 
     // MARK: - Session lifecycle
@@ -296,7 +310,7 @@ final class LiveDictationController {
         lastUtteranceTokens = []
         printedTokens = []
         frozenCount = 0
-        correctedCommitted = ""
+        committedText = ""
         volatileCorrected = ""
         sessionApp = Self.frontmostBundleID()
 
@@ -368,9 +382,45 @@ final class LiveDictationController {
         // only after the partial was already printed — chasing that case change
         // would erase and retype the whole volatile span at every sentence start.
         // Keep the on-screen casing of the unchanged prefix instead.
-        volatileCorrected = Self.stabilizedPrefix(old: volatileCorrected, new: corrected)
-        typer.render(committed: correctedCommitted, volatile: volatileCorrected)
+        let previousFull = volatileCorrected
+        volatileCorrected = Self.stabilizedPrefix(old: previousFull, new: corrected)
+        if volatileCorrected != previousFull {
+            lastVolatileChangeAt = Date()   // the trailing word is (again) unstable
+        }
         if phase == .listening { scheduleFreeze() }
+        renderVolatile()
+    }
+
+    /// Render the volatile span with the trailing word held back while it is
+    /// still churning, and (re)schedule the release pass.
+    private func renderVolatile() {
+        let display = displayVolatile()
+        let target = committedText.isEmpty
+            ? display
+            : (display.isEmpty ? committedText : committedText + " " + display)
+        typer.render(target: target, frozen: committedText.count)
+        scheduleSettleReleaseIfNeeded()
+    }
+
+    /// The full volatile target minus the trailing word, while that word is
+    /// younger than `wordSettleDelay`. Keeps the trailing space so the held
+    /// word simply appends when released; a lone unstable word is held entirely.
+    private func displayVolatile() -> String {
+        let full = volatileCorrected
+        guard !full.isEmpty,
+              Date().timeIntervalSince(lastVolatileChangeAt) < wordSettleDelay else { return full }
+        guard let cut = full.lastIndex(of: " ") else { return "" }   // single word: hold it all
+        return String(full[full.startIndex ... cut])
+    }
+
+    private func scheduleSettleReleaseIfNeeded() {
+        settleTimer?.cancel()
+        settleTimer = nil
+        guard displayVolatile() != volatileCorrected else { return }
+        let delay = max(0.05, wordSettleDelay - Date().timeIntervalSince(lastVolatileChangeAt))
+        let work = DispatchWorkItem { [weak self] in self?.renderVolatile() }
+        settleTimer = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
     }
 
     /// Longest case-insensitive common prefix of `old` and `new`, taken from `old`
@@ -406,26 +456,30 @@ final class LiveDictationController {
     }
 
     /// Freeze the volatile tail: it becomes ordinary text from the user's point
-    /// of view — BabelBar will never revise it again.
+    /// of view — BabelBar will never revise it again. Held-back words are
+    /// released (typed) here: the typer's single-string diff sees them as a
+    /// plain append of the target.
     private func freezeCurrentVolatile() {
         freezeTimer?.cancel(); freezeTimer = nil
+        settleTimer?.cancel(); settleTimer = nil
         frozenCount = printedTokens.count
         let span = volatileCorrected
         volatileCorrected = ""
+        lastVolatileChangeAt = Date.distantPast
         guard !span.isEmpty else { return }
-        correctedCommitted += correctedCommitted.isEmpty ? span : " " + span
+        committedText = committedText.isEmpty ? span : committedText + " " + span
         if settings?.frequencyLearningEnabled == true {
             let personalTerms = PersonalDictionaryStore.shared.entries.filter(\.enabled).map(\.written)
             FrequencyTracker.recordHits(in: span, personalTerms: personalTerms)   // TZ §12
         }
-        typer.render(committed: correctedCommitted, volatile: "")
+        typer.render(target: committedText, frozen: committedText.count)
     }
 
     private func handleAppSwitch() {
         guard phase == .listening || phase == .finishing else { return }
-        typer.freezeVolatile()          // stop revising the old field immediately
+        typer.freezeAll()            // stop revising the old field immediately
         freezeCurrentVolatile()
-        sessionApp = ""                 // the end-of-session AX read would hit the wrong field
+        sessionApp = ""              // the end-of-session AX read would hit the wrong field
     }
 
     private func conclude() {
@@ -437,7 +491,7 @@ final class LiveDictationController {
 
         // Learning: snapshot the field we typed into — but only if the user
         // stayed in the same app for the whole session (TZ §11, §14).
-        let typed = correctedCommitted
+        let typed = committedText
         if let settings, settings.learnFromCorrections, !typed.isEmpty,
            !sessionApp.isEmpty, sessionApp == Self.frontmostBundleID() {
             CorrectionObserver.noteSessionEnded(typed: typed)
