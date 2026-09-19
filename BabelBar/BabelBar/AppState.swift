@@ -441,7 +441,13 @@ final class AppState: ObservableObject {
         guard !LiveDictationController.isRunningNow else { return }
         dictationEngine.requestMic { [weak self] ok in
             guard let self else { return }
-            guard ok else { self.errorMessage = self.t(.errMicSpeech); return }
+            guard ok else {
+                // The app window is hidden during cursor dictation — a silent
+                // errorMessage here looks like "the hotkey does nothing".
+                self.errorMessage = self.t(.errMicSpeech)
+                RecordingOverlay.shared.showError(self.t(.errMicSpeech))
+                return
+            }
             do {
                 try self.dictationEngine.start(duckAudio: self.settings.duckAudio)
                 self.playTriggerSound()
