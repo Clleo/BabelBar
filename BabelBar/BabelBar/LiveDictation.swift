@@ -56,6 +56,15 @@ final class AppleSpeechStreamer: StreamingRecognizer {
     /// was already replaced are dropped — they would corrupt the new utterance.
     private var generation = 0
 
+    // Ring buffer of the last `replayCap` seconds of audio, replayed into every
+    // NEW request. Without it, a request that dies during warm-up or at the
+    // server's 1-minute boundary takes its buffered audio with it — the user's
+    // opening or mid-sentence words simply vanished. (The controller strips the
+    // re-transcribed echo from the new request's transcript.)
+    private var replay: [AVAudioPCMBuffer] = []
+    private var replaySeconds: Double = 0
+    private let replayCap: Double = 6.0
+
     init(recognizer: SFSpeechRecognizer, contextual: [String], requiresOnDevice: Bool) {
         self.recognizer = recognizer
         self.contextual = contextual
@@ -69,8 +78,32 @@ final class AppleSpeechStreamer: StreamingRecognizer {
 
     /// Called on the audio thread — must stay cheap.
     func append(buffer: AVAudioPCMBuffer) {
-        lock.lock(); let req = request; lock.unlock()
+        lock.lock()
+        let req = request
+        stashForReplay(buffer)
+        lock.unlock()
         req?.append(buffer)
+    }
+
+    /// Deep copy so the audio engine can recycle the tap buffer. Lock held.
+    private func stashForReplay(_ buffer: AVAudioPCMBuffer) {
+        guard let copy = AVAudioPCMBuffer(pcmFormat: buffer.format, frameCapacity: buffer.frameLength) else { return }
+        copy.frameLength = buffer.frameLength
+        if let src = buffer.floatChannelData, let dst = copy.floatChannelData {
+            for c in 0 ..< Int(buffer.format.channelCount) {
+                memcpy(dst[c], src[c], Int(buffer.frameLength) * MemoryLayout<Float>.size)
+            }
+        } else if let src = buffer.int16ChannelData, let dst = copy.int16ChannelData {
+            for c in 0 ..< Int(buffer.format.channelCount) {
+                memcpy(dst[c], src[c], Int(buffer.frameLength) * MemoryLayout<Int16>.size)
+            }
+        }
+        replay.append(copy)
+        replaySeconds += Double(buffer.frameLength) / buffer.format.sampleRate
+        while replaySeconds > replayCap, let first = replay.first {
+            replay.removeFirst()
+            replaySeconds -= Double(first.frameLength) / first.format.sampleRate
+        }
     }
 
     func finish() {
@@ -110,6 +143,9 @@ final class AppleSpeechStreamer: StreamingRecognizer {
         // importantly — not bound by the server's ~1-minute request limit.
         req.requiresOnDeviceRecognition = requiresOnDevice
         lock.lock()
+        // A fresh request starts with no audio: re-feed it the recent ring so
+        // speech from before the restart is recognized too.
+        for buffer in replay { req.append(buffer) }
         generation += 1
         let gen = generation
         request = req
@@ -209,6 +245,10 @@ final class LiveDictationController {
     private var settledTokens: [String] = []
     private var lastUtteranceTokens: [String] = []
     private var frozenCount = 0
+    /// True after a request restart: the new request re-hears the replayed tail
+    /// of the session, so its transcript begins with an echo of already-settled
+    /// words that must be stripped, not printed again.
+    private var skipReplayEcho = false
     /// Frozen, corrected text — exactly what the field shows before the volatile
     /// tail (the typer renders `committedText + " " + volatile` as one string).
     private var committedText = ""
@@ -309,6 +349,7 @@ final class LiveDictationController {
         settledTokens = []
         lastUtteranceTokens = []
         frozenCount = 0
+        skipReplayEcho = false
         committedText = ""
         volatileCorrected = ""
         sessionApp = Self.frontmostBundleID()
@@ -360,8 +401,28 @@ final class LiveDictationController {
         // new", wiping the whole span. A whole-span rebuild makes them plain
         // small string edits instead.
         let startInUtterance = max(0, frozenCount - settledTokens.count)
-        let spanTokens = Array(utteranceTok.dropFirst(startInUtterance))
-        let corrected = TranscriptCorrector.correct(spanTokens.joined(separator: " "), rules: rules)
+        var spanTokens = Array(utteranceTok.dropFirst(startInUtterance))
+        // After a restart the new request re-hears the replayed tail of the
+        // session: skip the tokens that merely re-transcribe already-settled
+        // words, so the echo isn't printed twice. Case-insensitive, longest
+        // common prefix against the settled tail — it stops by itself as soon
+        // as genuinely new speech begins.
+        if skipReplayEcho, !settledTokens.isEmpty, !spanTokens.isEmpty {
+            let tail = settledTokens.suffix(60)
+            var echo = 0
+            while echo < tail.count, echo < spanTokens.count,
+                  tail[tail.index(tail.startIndex, offsetBy: echo)].lowercased()
+                    == spanTokens[echo].lowercased() {
+                echo += 1
+            }
+            if echo > 0 { spanTokens.removeFirst(echo) }
+        }
+        var corrected = TranscriptCorrector.correct(spanTokens.joined(separator: " "), rules: rules)
+        // Spoken punctuation / new lines work in live dictation too ("точка",
+        // "с новой строки") — span-safe, no re-casing, no trimming.
+        if settings?.voiceCommandsEnabled != false {
+            corrected = VoiceCommands.applyInline(to: corrected)
+        }
         // Apple Speech (addsPunctuation) often capitalizes a sentence's first word
         // only after the partial was already printed — chasing that case change
         // would erase and retype the whole volatile span at every sentence start.
@@ -379,10 +440,7 @@ final class LiveDictationController {
     /// still churning, and (re)schedule the release pass.
     private func renderVolatile() {
         let display = displayVolatile()
-        let target = committedText.isEmpty
-            ? display
-            : (display.isEmpty ? committedText : committedText + " " + display)
-        typer.render(target: target, frozen: committedText.count)
+        typer.render(target: Self.join(committedText, display), frozen: committedText.count)
         scheduleSettleReleaseIfNeeded()
     }
 
@@ -425,11 +483,14 @@ final class LiveDictationController {
     }
 
     /// The current request died (server ~1-min limit or an error) and a fresh one
-    /// begins: settle its final transcript into history and freeze the volatile tail.
+    /// begins: settle its final transcript into history and freeze the volatile
+    /// tail. The fresh request is fed the recent audio (replay ring), so its
+    /// transcript will start with an echo — `skipReplayEcho` strips it.
     private func handleRestart() {
         freezeCurrentVolatile()
         settledTokens += lastUtteranceTokens
         lastUtteranceTokens = []
+        skipReplayEcho = true
     }
 
     private func scheduleFreeze() {
@@ -447,11 +508,12 @@ final class LiveDictationController {
         freezeTimer?.cancel(); freezeTimer = nil
         settleTimer?.cancel(); settleTimer = nil
         frozenCount = settledTokens.count + lastUtteranceTokens.count
+        skipReplayEcho = false
         let span = volatileCorrected
         volatileCorrected = ""
         lastVolatileChangeAt = Date.distantPast
         guard !span.isEmpty else { return }
-        committedText = committedText.isEmpty ? span : committedText + " " + span
+        committedText = Self.join(committedText, span)
         if settings?.frequencyLearningEnabled == true {
             let personalTerms = PersonalDictionaryStore.shared.entries.filter(\.enabled).map(\.written)
             FrequencyTracker.recordHits(in: span, personalTerms: personalTerms)   // TZ §12
@@ -529,6 +591,13 @@ final class LiveDictationController {
 
     private static func tokens(_ text: String) -> [String] {
         text.split(whereSeparator: \.isWhitespace).map(String.init)
+    }
+
+    /// Join two printed fragments with a space — unless the left one ends with
+    /// a line break the user asked for ("с новой строки").
+    private static func join(_ a: String, _ b: String) -> String {
+        guard !a.isEmpty, !b.isEmpty else { return a.isEmpty ? b : a }
+        return a.hasSuffix("\n") ? a + b : a + " " + b
     }
 
     private static func frontmostBundleID() -> String {

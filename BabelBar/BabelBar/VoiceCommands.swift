@@ -69,6 +69,68 @@ enum VoiceCommands {
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    /// Span-safe variant for live (streaming) dictation: same spoken → mark
+    /// replacement, but never re-cases or trims — the span is usually
+    /// mid-sentence, and the live typer's diff must see only real changes.
+    /// Line breaks pass through to the typer as ordinary characters.
+    static func applyInline(to text: String) -> String {
+        let tokens = text.split(whereSeparator: \.isWhitespace).map(String.init)
+        guard !tokens.isEmpty else { return text }
+        let cores = tokens.map(core)
+
+        var out = ""
+        var i = 0
+        while i < tokens.count {
+            var length = min(maxPhrase, tokens.count - i)
+            var matched = false
+            // Longest match wins, same as the batch path. A mark that can't be
+            // emitted (a leading "точка" with nothing to attach it to) leaves the
+            // spoken words as plain text instead of swallowing them.
+            while length > 0 {
+                let phrase = Array(cores[i ..< i + length])
+                if !phrase.contains(where: \.isEmpty),
+                   let mark = table[phrase], emitInline(mark, into: &out) {
+                    i += length
+                    matched = true
+                    break
+                }
+                length -= 1
+            }
+            if !matched {
+                out += out.isEmpty ? tokens[i] : " " + tokens[i]
+                i += 1
+            }
+        }
+        return out
+    }
+
+    /// Emits the mark; false when there is nothing to attach it to, so the
+    /// caller keeps the spoken words as text (live spans often begin mid-sentence).
+    private static func emitInline(_ mark: Mark, into out: inout String) -> Bool {
+        switch mark {
+        case .punct:
+            guard !out.isEmpty, !out.hasSuffix("\n") else { return false }
+        case .newline:
+            guard !out.isEmpty else { return false }
+        default:
+            break
+        }
+        trimTrailingSpaces(&out)
+        switch mark {
+        case .punct(let s):
+            stripTrailingMarks(&out)
+            out += s
+        case .spaced(let s):
+            out += (out.isEmpty || out.hasSuffix("\n")) ? s : " " + s
+        case .glued(let s):
+            out += s
+        case .newline(let count):
+            stripTrailingMarks(&out, keeping: sentenceEnders)
+            out += String(repeating: "\n", count: count)
+        }
+        return true
+    }
+
     private static func processLine(_ line: String) -> String {
         let tokens = line.split(whereSeparator: \.isWhitespace).map(String.init)
         guard !tokens.isEmpty else { return "" }
