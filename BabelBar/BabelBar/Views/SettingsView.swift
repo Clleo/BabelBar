@@ -3,12 +3,13 @@ import AppKit
 
 /// Sidebar sections of the settings window. Order here = order in the sidebar.
 enum SettingsSection: CaseIterable {
-    case general, voice, api, theme, permissions, about
+    case general, voice, dictionary, api, theme, permissions, about
 
     var icon: String {
         switch self {
         case .general:     return "gearshape.fill"
         case .voice:       return "mic.fill"
+        case .dictionary:  return "character.book.closed.fill"
         case .api:         return "network"
         case .theme:       return "paintpalette.fill"
         case .permissions: return "lock.shield.fill"
@@ -20,6 +21,7 @@ enum SettingsSection: CaseIterable {
         switch self {
         case .general:     return .secGeneral
         case .voice:       return .secVoice
+        case .dictionary:  return .secDictionary
         case .api:         return .secAPI
         case .theme:       return .secTheme
         case .permissions: return .secPermissions
@@ -35,6 +37,11 @@ struct SettingsView: View {
     @State private var permRefresh = 0   // bump to re-read permission states
     @State private var keyField = ""
     @ObservedObject private var models = WhisperModelManager.shared
+    @ObservedObject private var personalDict = PersonalDictionaryStore.shared
+
+    // Personal dictionary "add rule" row.
+    @State private var newSpoken = ""
+    @State private var newWritten = ""
 
     // AI Instructions text area — user-resizable by dragging its bottom-right corner.
     @State private var aiHeight: CGFloat = 64
@@ -156,6 +163,9 @@ struct SettingsView: View {
         switch s {
         case .general:     appSettings
         case .voice:       voiceSettings
+        case .dictionary:
+            dictionariesCard
+            personalDictionaryCard
         case .api:         apiSettings
         case .theme:       themeSettings
         case .permissions: permissionsSettings
@@ -568,6 +578,7 @@ struct SettingsView: View {
             if enabled {
                 voiceRows
                 speechSubsection
+                liveDictationSubsection
             }
         }
         .padding(20)
@@ -651,6 +662,189 @@ struct SettingsView: View {
             }
     }
 
+    // MARK: - LIVE DICTATION (v3.0)
+
+    /// Real-time streaming dictation — its own hotkey, independent of the
+    /// Whisper-based Fn / Shift+Fn modes above.
+    private var liveDictationSubsection: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            sectionTitle(state.t(.liveDictation), "keyboard", rowSpacing: 16)
+
+            row(state.t(.liveDictation), help: state.t(.tipLiveDictation)) {
+                HStack(spacing: 10) {
+                    ModifierComboRecorder(combo: $state.settings.liveDictateHotkey,
+                                          recordingPrompt: state.t(.recordModifiers)) {
+                        state.saveSettings()
+                        VoiceHotkeys.shared.refreshBindings()
+                    }
+                    CapsuleToggle(isOn: Binding(
+                        get: { state.settings.liveDictationEnabled },
+                        set: { state.settings.liveDictationEnabled = $0; state.saveSettings()
+                               VoiceHotkeys.shared.refreshBindings() }
+                    ))
+                }
+            }
+
+            if state.settings.liveDictationEnabled {
+                row(state.t(.liveLanguageLabel)) {
+                    CapsuleSegmented(selection: Binding(
+                        get: { state.settings.liveDictationLanguage },
+                        set: { state.settings.liveDictationLanguage = $0; state.saveSettings() }
+                    ), options: [.auto, .ru, .en]) {
+                        $0 == .auto ? state.t(.autoDetect) : $0 == .ru ? "Русский" : "English"
+                    }
+                    .frame(width: 200)
+                }
+                row(state.t(.liveOnDevice), help: state.t(.tipLiveOnDevice)) {
+                    CapsuleToggle(isOn: Binding(
+                        get: { state.settings.liveOnDeviceOnly },
+                        set: { state.settings.liveOnDeviceOnly = $0; state.saveSettings() }
+                    ))
+                }
+            }
+        }
+    }
+
+    // MARK: - DICTIONARY (v3.0)
+
+    /// Developer dictionary + frequency learning.
+    private var dictionariesCard: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            sectionTitle(state.t(.secDictionary), "character.book.closed.fill", rowSpacing: 16)
+
+            row(state.t(.devDictionary), help: state.t(.tipDevDictionary)) {
+                HStack(spacing: 10) {
+                    Text("\(DeveloperDictionary.terms.count) + \(DeveloperDictionary.aliases.count)")
+                        .font(.system(size: 11)).foregroundColor(Theme.textSecondary)
+                    CapsuleToggle(isOn: Binding(
+                        get: { state.settings.developerDictionaryEnabled },
+                        set: { state.settings.developerDictionaryEnabled = $0; state.saveSettings() }
+                    ))
+                }
+            }
+
+            row(state.t(.freqLearning), help: state.t(.tipFreq)) {
+                HStack(spacing: 10) {
+                    HoverTextButton(title: state.t(.resetStatistics)) { FrequencyTracker.reset() }
+                    CapsuleToggle(isOn: Binding(
+                        get: { state.settings.frequencyLearningEnabled },
+                        set: { state.settings.frequencyLearningEnabled = $0; state.saveSettings() }
+                    ))
+                }
+            }
+        }
+        .padding(20)
+        .glassPanel(corner: 16)
+    }
+
+    /// Personal rules (spoken → written) + learned suggestions, all local.
+    private var personalDictionaryCard: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            sectionTitle(state.t(.personalDictionary), "person.text.rectangle", rowSpacing: 16)
+
+            if personalDict.entries.isEmpty {
+                Text(state.t(.tipPersonalDict))
+                    .font(.system(size: 11)).foregroundColor(Theme.textSecondary)
+            } else {
+                ForEach(personalDict.entries) { entry in
+                    PersonalEntryRow(entry: entry)
+                }
+            }
+
+            // Add rule: two fields + button.
+            HStack(spacing: 8) {
+                TextField(state.t(.spokenForm), text: $newSpoken)
+                    .textFieldStyle(.plain).fieldStyle(150)
+                Image(systemName: "arrow.right")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundColor(Theme.textSecondary)
+                TextField(state.t(.writtenForm), text: $newWritten)
+                    .textFieldStyle(.plain).fieldStyle(150)
+                HoverTextButton(title: state.t(.addRule)) {
+                    PersonalDictionaryStore.shared.add(spoken: newSpoken, written: newWritten)
+                    newSpoken = ""
+                    newWritten = ""
+                }
+            }
+
+            Divider().overlay(Theme.controlBorder)
+
+            row(state.t(.learnCorrections), help: state.t(.tipLearn)) {
+                CapsuleToggle(isOn: Binding(
+                    get: { state.settings.learnFromCorrections },
+                    set: { state.settings.learnFromCorrections = $0; state.saveSettings() }
+                ))
+            }
+            if state.settings.learnFromCorrections {
+                Text(state.t(.suggestionsHint))
+                    .font(.system(size: 11)).foregroundColor(Theme.textSecondary)
+                let suggestions = personalDict.confidentCandidates
+                if suggestions.isEmpty {
+                    Text(state.t(.noSuggestions))
+                        .font(.system(size: 11)).foregroundColor(Theme.textSecondary.opacity(0.7))
+                } else {
+                    ForEach(suggestions) { cand in
+                        HStack(spacing: 8) {
+                            Text("\(cand.spoken) → \(cand.written)")
+                                .font(labelFont).foregroundColor(Theme.textPrimary)
+                                .lineLimit(1).truncationMode(.middle)
+                            Text(String(format: state.t(.timesSeenFmt), cand.count))
+                                .font(.system(size: 10)).foregroundColor(Theme.textSecondary)
+                            Spacer()
+                            HoverTextButton(title: state.t(.addRule)) {
+                                PersonalDictionaryStore.shared.confirmCandidate(cand.id)
+                            }
+                            HoverTextButton(title: state.t(.dismiss)) {
+                                PersonalDictionaryStore.shared.dismissCandidate(cand.id)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        .padding(20)
+        .glassPanel(corner: 16)
+    }
+
+    /// One editable personal rule row: spoken → written, enable toggle, delete.
+    private struct PersonalEntryRow: View {
+        @EnvironmentObject var state: AppState
+        let entry: DictEntry
+        @State private var spoken: String
+        @State private var written: String
+
+        init(entry: DictEntry) {
+            self.entry = entry
+            _spoken = State(initialValue: entry.spoken)
+            _written = State(initialValue: entry.written)
+        }
+
+        private func commit() {
+            PersonalDictionaryStore.shared.update(entry.id, spoken: spoken, written: written)
+        }
+
+        var body: some View {
+            HStack(spacing: 8) {
+                TextField(state.t(.spokenForm), text: $spoken)
+                    .textFieldStyle(.plain).fieldStyle(150)
+                    .onSubmit { commit() }
+                Image(systemName: "arrow.right")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundColor(Theme.textSecondary)
+                TextField(state.t(.writtenForm), text: $written)
+                    .textFieldStyle(.plain).fieldStyle(150)
+                    .onSubmit { commit() }
+                CapsuleToggle(isOn: Binding(
+                    get: { entry.enabled },
+                    set: { PersonalDictionaryStore.shared.setEnabled(entry.id, $0) }
+                ))
+                HoverIconButton(systemName: "trash", size: 12) {
+                    PersonalDictionaryStore.shared.remove(entry.id)
+                }
+            }
+        }
+    }
+
     // MARK: - PERMISSIONS
 
     private var permissionsSettings: some View {
@@ -660,6 +854,7 @@ struct SettingsView: View {
             permissionRow(state.t(.permInput), icon: "keyboard", granted: Permissions.inputMonitoring(), kind: .inputMonitoring)
             permissionRow(state.t(.permScreen), icon: "rectangle.dashed", granted: Permissions.screenRecording(), kind: .screenRecording)
             permissionRow(state.t(.permMic), icon: "mic", granted: Permissions.microphone(), kind: .microphone)
+            permissionRow(state.t(.permSpeech), icon: "waveform", granted: Permissions.speechRecognition(), kind: .speechRecognition)
         }
         .padding(20)
         .glassPanel(corner: 16)

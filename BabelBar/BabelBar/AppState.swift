@@ -436,6 +436,9 @@ final class AppState: ObservableObject {
     /// Shared capture start for both cursor shortcuts (Fn and Shift+Fn) — the recording
     /// phase is identical; only the stop handlers differ.
     private func beginCursorCapture() {
+        // Never two engines on the microphone at once — a live (streaming) session
+        // owns it until stopped.
+        guard !LiveDictationController.isRunningNow else { return }
         dictationEngine.requestMic { [weak self] ok in
             guard let self else { return }
             guard ok else { self.errorMessage = self.t(.errMicSpeech); return }
@@ -508,6 +511,31 @@ final class AppState: ObservableObject {
             default:
                 RecordingOverlay.shared.hide()
             }
+        }
+    }
+
+    // MARK: - Live (streaming) dictation — ⌘Fn (v3.0)
+
+    /// Text streams into the focused app's field while the user speaks; dictionaries
+    /// correct terminology on the fly. The controller owns the whole session
+    /// (AppState is deliberately not MainActor — hence the hops).
+    func startLiveDictation() {
+        guard !LiveDictationController.isRunningNow, !dictationEngine.isBusy else { return }
+        let settings = self.settings
+        Task { @MainActor in
+            LiveDictationController.shared.start(settings: settings) { [weak self] key in
+                guard let self else { return }
+                // The app window may be hidden — surface failures in the pill (same
+                // contract as the Whisper cursor flows).
+                self.errorMessage = self.t(key)
+                RecordingOverlay.shared.showError(self.t(key))
+            }
+        }
+    }
+
+    func stopLiveDictation() {
+        Task { @MainActor in
+            LiveDictationController.shared.stop()
         }
     }
 

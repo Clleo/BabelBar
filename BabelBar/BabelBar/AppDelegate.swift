@@ -179,18 +179,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if !s.settings.translateDictateHotkey.isEmpty {
                 list.append((s.settings.translateDictateHotkey, .dictateTranslateToCursor))
             }
+            if s.settings.liveDictationEnabled, !s.settings.liveDictateHotkey.isEmpty {
+                list.append((s.settings.liveDictateHotkey, .liveDictateToCursor))
+            }
             return list
         }
         VoiceHotkeys.shared.onStart = { [weak appState] action in
             switch action {
             case .dictateToCursor:          appState?.startCursorDictation()
             case .dictateTranslateToCursor: appState?.startCursorTranslateDictation()
+            case .liveDictateToCursor:      appState?.startLiveDictation()
             }
         }
         VoiceHotkeys.shared.onStop = { [weak appState] action in
             switch action {
             case .dictateToCursor:          appState?.stopCursorDictation()
             case .dictateTranslateToCursor: appState?.stopCursorTranslateDictation()
+            case .liveDictateToCursor:      appState?.stopLiveDictation()
             }
         }
         VoiceHotkeys.shared.start()

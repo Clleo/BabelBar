@@ -153,6 +153,10 @@ final class DictationEngine {
     private var localVariant: String?
     private(set) var isTranscribing = false
 
+    /// True while a batch capture or its transcription is running — the live
+    /// dictation controller checks this so two engines never fight over the mic.
+    var isBusy: Bool { recorder.isRecording || isTranscribing }
+
     /// Reports model warm-up state (true = loading/initializing, false = ready). Invoked on main.
     var onPreparing: (@MainActor (Bool) -> Void)?
 

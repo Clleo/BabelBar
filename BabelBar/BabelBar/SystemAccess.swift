@@ -7,6 +7,7 @@ import CoreGraphics
 import AVFoundation
 import CoreAudio
 import AudioToolbox
+import Speech
 
 /// Launch-at-login via SMAppService (macOS 13+).
 enum LoginItem {
@@ -39,6 +40,12 @@ enum Permissions {
         AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
     }
 
+    /// Live (streaming) dictation runs on Apple Speech — it needs the separate
+    /// Speech Recognition grant on top of the microphone.
+    static func speechRecognition() -> Bool {
+        SFSpeechRecognizer.authorizationStatus() == .authorized
+    }
+
     /// Open the relevant Privacy & Security pane in System Settings.
     static func openSettings(_ kind: Kind) {
         let anchor: String
@@ -47,13 +54,14 @@ enum Permissions {
         case .inputMonitoring:   anchor = "Privacy_ListenEvent"
         case .screenRecording:   anchor = "Privacy_ScreenCapture"
         case .microphone:        anchor = "Privacy_Microphone"
+        case .speechRecognition: anchor = "Privacy_SpeechRecognition"
         }
         if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?\(anchor)") {
             NSWorkspace.shared.open(url)
         }
     }
 
-    enum Kind { case accessibility, inputMonitoring, screenRecording, microphone }
+    enum Kind { case accessibility, inputMonitoring, screenRecording, microphone, speechRecognition }
 }
 
 /// Built-in macOS alert sounds (from /System/Library/Sounds).

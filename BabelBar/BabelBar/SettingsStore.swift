@@ -96,6 +96,20 @@ enum InsertMethod: String, CaseIterable, Identifiable, Codable {
     var id: String { rawValue }
 }
 
+/// Recognition locale for live (streaming) dictation. `auto` = the system
+/// language; the controller falls back to Russian, then English.
+enum LiveDictationLanguage: String, CaseIterable, Identifiable, Codable {
+    case auto, ru, en
+    var id: String { rawValue }
+    var locale: Locale {
+        switch self {
+        case .auto: return Locale.current
+        case .ru:   return Locale(identifier: "ru_RU")
+        case .en:   return Locale(identifier: "en_US")
+        }
+    }
+}
+
 struct AppSettings: Codable {
     var appearance: Appearance = .dark
     var interfaceLang: UILanguage = .en
@@ -156,6 +170,20 @@ struct AppSettings: Codable {
     var speechEngine: SpeechEngine = .local
     var whisperModel: WhisperModel = .base
     var insertMethod: InsertMethod = .paste
+
+    // Live (streaming) dictation — v3.0. Separate hotkey so the Whisper modes
+    // (Fn / Shift+Fn) keep working exactly as before.
+    var liveDictationEnabled = true
+    var liveDictateHotkey = ModifierCombo(fn: true, command: true)   // ⌘Fn
+    var liveDictationLanguage: LiveDictationLanguage = .ru
+    /// Refuse to start live dictation when the locale has no on-device model
+    /// (otherwise recognition would go through Apple's servers).
+    var liveOnDeviceOnly = false
+
+    // Dictionaries (v3.0).
+    var developerDictionaryEnabled = true
+    var frequencyLearningEnabled = true
+    var learnFromCorrections = true
     // Remote (cloud) Whisper transcription account (separate from the text-translation API).
     var transcriptionProvider: TranscriptionProvider = .groq
     var transcriptionBaseURL = "https://api.groq.com/openai/v1"
@@ -172,6 +200,8 @@ struct AppSettings: Codable {
         case dictateHotkey, translateDictateHotkey, voiceInputEnabled, voiceSoundEnabled, voiceSoundName, voiceSoundVolume, showRecordingDot, duckAudio
         case voiceCommandsEnabled, dictationCleanupEnabled, dictationInstructions
         case speechEngine, whisperModel, insertMethod
+        case liveDictationEnabled, liveDictateHotkey, liveDictationLanguage, liveOnDeviceOnly
+        case developerDictionaryEnabled, frequencyLearningEnabled, learnFromCorrections
         case transcriptionProvider, transcriptionBaseURL, transcriptionModel
     }
 
@@ -215,6 +245,13 @@ struct AppSettings: Codable {
         speechEngine = (try? c.decode(SpeechEngine.self, forKey: .speechEngine)) ?? .local
         whisperModel = (try? c.decode(WhisperModel.self, forKey: .whisperModel)) ?? .base
         insertMethod = (try? c.decode(InsertMethod.self, forKey: .insertMethod)) ?? .paste
+        liveDictationEnabled = (try? c.decode(Bool.self, forKey: .liveDictationEnabled)) ?? true
+        liveDictateHotkey = (try? c.decode(ModifierCombo.self, forKey: .liveDictateHotkey)) ?? AppSettings().liveDictateHotkey
+        liveDictationLanguage = (try? c.decode(LiveDictationLanguage.self, forKey: .liveDictationLanguage)) ?? .ru
+        liveOnDeviceOnly = (try? c.decode(Bool.self, forKey: .liveOnDeviceOnly)) ?? false
+        developerDictionaryEnabled = (try? c.decode(Bool.self, forKey: .developerDictionaryEnabled)) ?? true
+        frequencyLearningEnabled = (try? c.decode(Bool.self, forKey: .frequencyLearningEnabled)) ?? true
+        learnFromCorrections = (try? c.decode(Bool.self, forKey: .learnFromCorrections)) ?? true
         transcriptionProvider = (try? c.decode(TranscriptionProvider.self, forKey: .transcriptionProvider)) ?? .groq
         transcriptionBaseURL = (try? c.decode(String.self, forKey: .transcriptionBaseURL)) ?? "https://api.groq.com/openai/v1"
         transcriptionModel = (try? c.decode(String.self, forKey: .transcriptionModel)) ?? "whisper-large-v3"

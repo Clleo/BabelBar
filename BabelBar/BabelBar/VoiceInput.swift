@@ -41,6 +41,7 @@ struct ModifierCombo: Codable, Equatable {
 enum VoiceAction {
     case dictateToCursor          // Fn:       speak → type raw transcript at the cursor
     case dictateTranslateToCursor // Shift+Fn: speak → translate in background → type at the cursor
+    case liveDictateToCursor      // ⌘Fn:      speak → text streams into the field while you talk (v3.0)
 }
 
 /// Types a string at the current cursor position in the frontmost app (no clipboard).

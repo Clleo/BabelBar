@@ -19,6 +19,13 @@ final class AudioRecorder {
     private(set) var lastCaptureRatio: Double = 1
     private(set) var lastWallDuration: TimeInterval = 0
 
+    /// Live consumer of the input buffers (streaming recognition, v3.0). Called
+    /// on the audio thread — must stay cheap.
+    var onBuffer: ((AVAudioPCMBuffer) -> Void)?
+    /// When a live consumer handles audio itself, don't accumulate samples: a
+    /// streaming session can run for many minutes and the batch path isn't used.
+    var accumulateSamples = true
+
     /// Begin capturing. Throws if the audio engine can't start.
     func start() throws {
         // A second start (e.g. cursor dictation while the in-app mic is already recording)
@@ -49,7 +56,8 @@ final class AudioRecorder {
 
     private func append(_ buffer: AVAudioPCMBuffer) {
         MicLevel.shared.push(Self.micLevel(of: buffer))   // live waveform
-        guard let converter else { return }
+        onBuffer?(buffer)                                 // streaming recognition, if attached
+        guard accumulateSamples, let converter else { return }
 
         let ratio = targetFormat.sampleRate / buffer.format.sampleRate
         let capacity = AVAudioFrameCount(Double(buffer.frameLength) * ratio) + 64

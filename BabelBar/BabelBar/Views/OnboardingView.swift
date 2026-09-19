@@ -104,10 +104,11 @@ struct OnboardingView: View {
         let granted: Bool = {
             _ = permRefresh
             switch kind {
-            case .accessibility:   return Permissions.accessibility()
-            case .inputMonitoring: return Permissions.inputMonitoring()
-            case .screenRecording: return Permissions.screenRecording()
-            case .microphone:      return Permissions.microphone()
+            case .accessibility:     return Permissions.accessibility()
+            case .inputMonitoring:   return Permissions.inputMonitoring()
+            case .screenRecording:   return Permissions.screenRecording()
+            case .microphone:        return Permissions.microphone()
+            case .speechRecognition: return Permissions.speechRecognition()
             }
         }()
         return VStack(spacing: 22) {

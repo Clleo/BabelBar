@@ -28,6 +28,8 @@
 	<string>BabelBar uses keyboard events to copy and translate your selected text.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>BabelBar uses the microphone for voice input you can translate.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>BabelBar uses speech recognition to type what you say, live, in any app.</string>
 	<key>NSHumanReadableCopyright</key>
 	<string>Copyright © 2026. All rights reserved.</string>
 </dict>
