@@ -363,9 +363,31 @@ final class LiveDictationController {
         }
         let novel = Array(full.dropFirst(p))
         printedTokens.append(contentsOf: novel)
-        volatileCorrected = TranscriptCorrector.correct(novel.joined(separator: " "), rules: rules)
+        let corrected = TranscriptCorrector.correct(novel.joined(separator: " "), rules: rules)
+        // Apple Speech (addsPunctuation) often capitalizes a sentence's first word
+        // only after the partial was already printed — chasing that case change
+        // would erase and retype the whole volatile span at every sentence start.
+        // Keep the on-screen casing of the unchanged prefix instead.
+        volatileCorrected = Self.stabilizedPrefix(old: volatileCorrected, new: corrected)
         typer.render(committed: correctedCommitted, volatile: volatileCorrected)
         if phase == .listening { scheduleFreeze() }
+    }
+
+    /// Longest case-insensitive common prefix of `old` and `new`, taken from `old`
+    /// (what's already on screen), with the remainder from `new`. Case-only
+    /// revisions of already-printed characters therefore cost zero keystrokes.
+    static func stabilizedPrefix(old: String, new: String) -> String {
+        guard !old.isEmpty, !new.isEmpty else { return new }
+        var oi = old.startIndex
+        var ni = new.startIndex
+        while oi < old.endIndex, ni < new.endIndex {
+            if old[oi].lowercased() != new[ni].lowercased() { break }
+            old.formIndex(after: &oi)
+            new.formIndex(after: &ni)
+        }
+        let kept = old[old.startIndex ..< oi]
+        if kept == new[new.startIndex ..< ni] { return new }
+        return String(kept) + new[ni...]
     }
 
     /// The current request died (server ~1-min limit or an error) and a fresh one
