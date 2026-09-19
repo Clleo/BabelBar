@@ -120,6 +120,32 @@ struct DictationRegressionTests {
                      correct: { VoiceCommands.applyInline(to: $0) }, correctSpan: { VoiceCommands.applyInline(to: $0, followsText: true) })
         check(lines.target == "привет\nмир", "line command after a pause joins without a stray space")
 
+        func timedWords(_ words: [String]) -> [LiveSpeechWord] {
+            words.enumerated().map { LiveSpeechWord(text: $1, start: Double($0), end: Double($0) + 0.8) }
+        }
+        var phrase = LiveTranscript()
+        let first = "сделай мне новый компонент каталога товаров".components(separatedBy: " ")
+        phrase.update(first.joined(separator: " "), timed: timedWords(first), correct: {$0})
+        check(phrase.freezeStable(holding: 2) == "сделай мне новый компонент", "phrase mode commits all but the held words")
+        check(phrase.committed == "сделай мне новый компонент" && phrase.volatile == "каталога товаров", "held words stay volatile")
+        let second = first + ["с", "адаптивной", "сеткой"]
+        phrase.update(second.joined(separator: " "), timed: timedWords(second), correct: {$0})
+        check(phrase.volatile == "каталога товаров с адаптивной сеткой", "held words continue into the next update")
+        phrase.update("сделай мне новый компонент каталога товаров с адаптивной сеткой", timed: [], correct: {$0})
+        phrase.freeze()
+        check(phrase.committed == "сделай мне новый компонент каталога товаров с адаптивной сеткой", "final freeze flushes the held words once")
+        var revised = LiveTranscript()
+        let a = "открой файл и запусти тесты".components(separatedBy: " ")
+        revised.update(a.joined(separator: " "), timed: [], correct: {$0})
+        revised.freezeStable(holding: 2)
+        revised.update("открой файл и запусти тесты потом", timed: [], correct: {$0})
+        check(revised.volatile == "запусти тесты потом", "phrase mode without timestamps aligns by text")
+        var wordRevised = LiveTranscript()
+        wordRevised.update("открой файл и запусти тест", timed: [], correct: {$0})
+        wordRevised.freezeStable(holding: 2)
+        wordRevised.update("открой файл и запусти тесты потом", timed: [], correct: {$0})
+        check(wordRevised.committed == "открой файл и" && wordRevised.volatile == "запусти тесты потом", "a revised held word is not duplicated")
+
         let personal = DictEntry(spoken: "некст джей эс", written: "MyFramework")
         check(TranscriptCorrector.correct("некст джей эс", rules: [personal] + rules) == "MyFramework", "personal dictionary priority")
         check(DictionaryContext.contextualStrings(personal: [], developerEnabled: false, frequencyEnabled: false).isEmpty, "disabled dictionary/context returns no hints")

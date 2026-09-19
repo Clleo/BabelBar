@@ -55,6 +55,23 @@ struct LiveTranscript {
         return result
     }
 
+    var volatileWordCount: Int { Self.words(volatile).count }
+
+    /// Phrase mode: commit the stable head of the volatile span and keep the last
+    /// `hold` words, which the recognizer still revises. Text alignment takes over
+    /// from audio timestamps, so the held words stay volatile in the next update.
+    @discardableResult
+    mutating func freezeStable(holding hold: Int) -> String {
+        let words = Self.words(volatile)
+        guard words.count > hold else { return "" }
+        let stable = words.dropLast(hold).joined(separator: " ")
+        committed = Self.join(committed, stable)
+        volatile = words.suffix(hold).joined(separator: " ")
+        frozenPrefix = Array(lastWords.dropLast(hold))
+        through = nil
+        return stable
+    }
+
     mutating func restarted() {
         history = Array((history + lastWords).suffix(250))
         frozenPrefix = []; lastWords = []
@@ -239,6 +256,7 @@ final class LiveDictationController {
     private var settings: AppSettings?
     private var rules: [DictEntry] = []
     private var transcript = LiveTranscript()
+    private var renderedCommitted = ""
     private var target: AXLiveTextTarget?
     private var freezeTimer: DispatchWorkItem?
     private var watchdog: Timer?
@@ -339,7 +357,7 @@ final class LiveDictationController {
             guard let self, self.session == id, self.phase == .listening else { return }
             self.freeze(); self.transcript.restarted()
         }
-        self.streamer = streamer; transcript = LiveTranscript()
+        self.streamer = streamer; transcript = LiveTranscript(); renderedCommitted = ""
         typer.onInvalidated = { [weak self] in self?.abort() }
         inputGuard.start { [weak self] in self?.abort() }
         appObserver = NSWorkspace.shared.notificationCenter.addObserver(
@@ -381,20 +399,28 @@ final class LiveDictationController {
         })
         freezeTimer?.cancel()
         if final { freeze(); return }
-        typer.render(target: transcript.target, frozen: transcript.committed.count)
+        // Phrase mode: the field only ever receives text that will not change, so
+        // insertion is append-only. The last words stay unwritten until they settle.
+        if transcript.volatileWordCount >= Self.phraseWords + Self.heldWords { freeze(holding: Self.heldWords) }
         let id = session
         let work = DispatchWorkItem { [weak self] in
             guard let self, self.session == id, self.phase == .listening else { return }
             self.freeze()
         }
         freezeTimer = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.4, execute: work)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8, execute: work)
     }
 
-    private func freeze() {
+    private static let phraseWords = 3
+    private static let heldWords = 2
+
+    private func freeze(holding hold: Int? = nil) {
         freezeTimer?.cancel(); freezeTimer = nil
-        let span = transcript.freeze()
-        typer.render(target: transcript.committed, frozen: transcript.committed.count)
+        let span = hold.map { transcript.freezeStable(holding: $0) } ?? transcript.freeze()
+        if transcript.committed != renderedCommitted {
+            renderedCommitted = transcript.committed
+            typer.render(target: transcript.committed, frozen: transcript.committed.count)
+        }
         if settings?.frequencyLearningEnabled == true, !span.isEmpty {
             let personal = PersonalDictionaryStore.shared.entries.filter(\.enabled).map(\.written)
             let id = session, committed = transcript.committed
