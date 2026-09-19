@@ -526,7 +526,10 @@ final class AppState: ObservableObject {
     /// correct terminology on the fly. The controller owns the whole session
     /// (AppState is deliberately not MainActor — hence the hops).
     func startLiveDictation() {
-        guard !LiveDictationController.isRunningNow, !dictationEngine.isBusy else { return }
+        guard !dictationEngine.isBusy else {
+            DispatchQueue.main.async { VoiceHotkeys.shared.cancelActiveSession() }
+            return
+        }
         let settings = self.settings
         Task { @MainActor in
             LiveDictationController.shared.start(settings: settings) { [weak self] key in

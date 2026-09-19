@@ -272,10 +272,7 @@ struct OnboardingView: View {
                 .frame(maxWidth: 400)
 
             VStack(spacing: 10) {
-                hotkeyRow(state.t(.openBabelBar), state.settings.openHotKey.display)
-                hotkeyRow(state.t(.translateAuto), state.settings.selectionHotKey.displayDoubled)
-                hotkeyRow(state.t(.translateScreenshot), state.settings.screenshotHotKey.display)
-                hotkeyRow(state.t(.dictateToCursor), state.settings.dictateHotkey.display)
+                hotkeyRow(state.t(.liveDictation), "fn")
             }
             .padding(20)
             .glassPanel(corner: 16)

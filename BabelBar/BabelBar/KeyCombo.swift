@@ -4,6 +4,9 @@ import Carbon.HIToolbox
 /// A user-configurable keyboard shortcut: a key code plus modifier flags.
 /// Stored in settings and used both for Carbon hotkeys and the global NSEvent monitor.
 struct KeyCombo: Codable, Equatable {
+    static let unassigned = KeyCombo(keyCode: UInt32.max)
+    var isAssigned: Bool { keyCode != UInt32.max }
+
     var keyCode: UInt32
     var command: Bool = false
     var shift: Bool = false
@@ -36,6 +39,7 @@ struct KeyCombo: Codable, Equatable {
 
     /// Human-readable badge, e.g. "⌥ + Space" or "⇧ + ⌘ + 2".
     var display: String {
+        guard isAssigned else { return "—" }
         var parts: [String] = []
         if control { parts.append("⌃") }
         if option  { parts.append("⌥") }
@@ -46,7 +50,7 @@ struct KeyCombo: Codable, Equatable {
     }
 
     /// Badge for a double-tap shortcut, e.g. "⌘ + C + C".
-    var displayDoubled: String { display + "  +  " + keyName }
+    var displayDoubled: String { isAssigned ? display + "  +  " + keyName : "—" }
 }
 
 /// Maps macOS virtual key codes to readable names.

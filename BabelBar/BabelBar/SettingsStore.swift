@@ -143,13 +143,13 @@ struct AppSettings: Codable {
     var tokensLimit: Int = 500_000
 
     // Configurable hotkeys.
-    var openHotKey = KeyCombo(keyCode: 37, command: false, shift: false, option: true)       // ⌥ L
-    var selectionHotKey = KeyCombo(keyCode: 8, command: true)                                 // ⌘ C (double-tap)
-    var screenshotHotKey = KeyCombo(keyCode: 19, command: true, shift: true)                  // ⇧ ⌘ 2
+    var openHotKey = KeyCombo.unassigned
+    var selectionHotKey = KeyCombo.unassigned
+    var screenshotHotKey = KeyCombo.unassigned
 
     // Voice shortcuts (modifier-only, e.g. Fn / Shift+Fn).
     var dictateHotkey = ModifierCombo()                         // Whisper dictation — unbound since 3.0 (live took Fn)
-    var translateDictateHotkey = ModifierCombo(fn: true, shift: true)  // dictate → translate → insert at cursor
+    var translateDictateHotkey = ModifierCombo()
     var voiceInputEnabled = true    // master switch for the whole voice-input feature
     var voiceSoundEnabled = true
     var voiceSoundName = "Pop"
@@ -203,6 +203,12 @@ struct AppSettings: Codable {
         case liveDictationEnabled, liveDictateHotkey, liveDictationLanguage, liveOnDeviceOnly
         case developerDictionaryEnabled, frequencyLearningEnabled, learnFromCorrections
         case transcriptionProvider, transcriptionBaseURL, transcriptionModel
+    }
+
+    mutating func useFnOnly() {
+        openHotKey = .unassigned; selectionHotKey = .unassigned; screenshotHotKey = .unassigned
+        dictateHotkey = ModifierCombo(); translateDictateHotkey = ModifierCombo()
+        liveDictateHotkey = ModifierCombo(fn: true)
     }
 
     init() {}
@@ -330,10 +336,16 @@ enum SettingsStore {
             }
             UserDefaults.standard.set(true, forKey: liveFnMigrationKey)
         }
+        // Fn is the sole shortcut in 3.0.1, including customized legacy profiles.
+        s.useFnOnly()
+        // Shortcut migration must not rewrite secrets when Keychain is locked.
+        if let data = try? JSONEncoder().encode(s) { UserDefaults.standard.set(data, forKey: key) }
         return s
     }
 
     static func save(_ settings: AppSettings) {
+        var settings = settings
+        settings.useFnOnly()
         // Secrets → Keychain; everything else → UserDefaults JSON (keys excluded via CodingKeys).
         Keychain.set(settings.apiKey, for: Keychain.apiKey)
         Keychain.set(settings.apiKey2, for: Keychain.apiKey2)

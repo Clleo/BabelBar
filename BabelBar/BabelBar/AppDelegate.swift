@@ -172,17 +172,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Global voice shortcuts: dictate at the cursor (Fn) and dictate→translate→insert (Shift+Fn).
         VoiceHotkeys.shared.bindings = { [weak appState] in
             guard let s = appState, s.settings.voiceInputEnabled else { return [] }   // master off → no hotkeys
-            var list: [(ModifierCombo, VoiceAction)] = []
-            if !s.settings.dictateHotkey.isEmpty {
-                list.append((s.settings.dictateHotkey, .dictateToCursor))
-            }
-            if !s.settings.translateDictateHotkey.isEmpty {
-                list.append((s.settings.translateDictateHotkey, .dictateTranslateToCursor))
-            }
-            if s.settings.liveDictationEnabled, !s.settings.liveDictateHotkey.isEmpty {
-                list.append((s.settings.liveDictateHotkey, .liveDictateToCursor))
-            }
-            return list
+            return s.settings.liveDictationEnabled ? [(ModifierCombo(fn: true), .liveDictateToCursor)] : []
         }
         VoiceHotkeys.shared.onStart = { [weak appState] action in
             switch action {
@@ -285,10 +275,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let menu = NSMenu()
         let show = NSMenuItem(title: appState.t(.menuShow), action: #selector(menuShow), keyEquivalent: "")
         show.target = self; menu.addItem(show)
-        let settings = NSMenuItem(title: appState.t(.menuSettings), action: #selector(menuSettings), keyEquivalent: ",")
+        let settings = NSMenuItem(title: appState.t(.menuSettings), action: #selector(menuSettings), keyEquivalent: "")
         settings.target = self; menu.addItem(settings)
         menu.addItem(.separator())
-        let quit = NSMenuItem(title: appState.t(.menuQuit), action: #selector(menuQuit), keyEquivalent: "q")
+        let quit = NSMenuItem(title: appState.t(.menuQuit), action: #selector(menuQuit), keyEquivalent: "")
         quit.target = self; menu.addItem(quit)
         menu.popUp(positioning: nil, at: NSPoint(x: 0, y: button.bounds.height + 5), in: button)
     }

@@ -250,7 +250,10 @@ final class VoiceHotkeys {
         let id = sessionID
         DispatchQueue.main.asyncAfter(deadline: .now() + maxSessionDuration) { [weak self] in
             guard let self, self.sessionID == id, self.phase != .idle else { return }
-            self.finish()   // never leave the mic recording because a release went missing
+            // Live dictation supports long sessions; its controller owns stop,
+            // field-change and error handling. Keep the batch-recording limit.
+            guard self.activeAction != .liveDictateToCursor else { return }
+            self.finish()
         }
         onStart?(action)
     }
@@ -306,6 +309,14 @@ final class VoiceHotkeys {
             }
             prevHeld = held
         }
+    }
+
+    /// The controller may stop on a field change, input, or recognition failure.
+    /// Reset the key state as well so the very next Fn press starts a new session.
+    func cancelActiveSession() {
+        sessionID &+= 1
+        phase = .idle; activeAction = nil; activeCombo = ModifierCombo()
+        prevHeld = false; startPending = false
     }
 
     private func finish() {

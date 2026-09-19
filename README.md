@@ -16,15 +16,17 @@
   <img src="https://img.shields.io/badge/license-proprietary-lightgrey?style=flat-square" alt="License" />
 </p>
 
+**Version 3.0.1:** Fn is the only assigned shortcut (tap to start/stop live dictation, or hold to speak). Previous shortcut assignments and their settings controls have been removed. Screenshots below show earlier versions. Manual input or changing fields ends dictation; press Fn to continue at the new cursor.
+
 ---
 
-### Translate any selection — ⌘C+C
+### Translate text
 
 <p align="center">
   <img src=".github/feature_1.jpg" width="640" alt="BabelBar — translate any selection" />
 </p>
 
-Select text in any app, double-tap Copy — translation appears instantly. Edit either side, press Enter — the other updates live. Works with any language pair.
+Open BabelBar from the menu bar and paste text to translate. Edit either side, press Enter — the other updates live. Works with any language pair.
 
 ---
 
@@ -56,7 +58,7 @@ Colors, blur, contrast, opacity, text size — tune everything to match your des
   <img src=".github/feature_4.jpg" width="640" alt="BabelBar — voice input and speech settings" />
 </p>
 
-Hold **Fn**, speak, release — recognized text types directly at your cursor. **⇧Fn** for instant voice-to-translation. Local (WhisperKit, on-device) or online (Groq Whisper) recognition. Audio ducking automatically lowers system volume while you dictate.
+Press **Fn**, speak, and see text appear at your cursor. Press Fn again to stop. Local (WhisperKit, on-device) or online (Groq Whisper) recognition. Audio ducking automatically lowers system volume while you dictate.
 
 ---
 
@@ -66,7 +68,7 @@ Hold **Fn**, speak, release — recognized text types directly at your cursor. *
   <img src=".github/feature_5.jpg" width="640" alt="BabelBar — app settings and permissions" />
 </p>
 
-Customizable hotkeys, launch at login, multilingual interface (EN/RU), screenshot OCR — all from one clean settings panel. Clear permission status so you always know what's granted.
+Fn live dictation, launch at login, multilingual interface (EN/RU), screenshot OCR — all from one clean settings panel. Clear permission status so you always know what's granted.
 
 ---
 
@@ -74,17 +76,17 @@ Customizable hotkeys, launch at login, multilingual interface (EN/RU), screensho
 
 1. **Install & grant permissions** — Accessibility, Input Monitoring, Screen Recording, Microphone.
 2. **Add your API key** — from OpenAI, DeepSeek, Claude, z.ai, Groq, or any OpenAI-compatible provider.
-3. **Translate anywhere** — select text, press **⌘C+C**, get the translation instantly.
+3. **Translate anywhere** — open BabelBar and paste the text to translate.
 
 ## Features at a glance
 
 | | Feature | Description |
 |---|---|---|
-| **⌘C+C** | **Translate selection** | Select text in any app, double-tap Copy — translation appears instantly |
+| Menu bar | **Translate selection** | Paste text into BabelBar to translate |
 | **↩** | **Two-way editing** | Edit the translation, press Enter — get reverse translation |
-| **⇧⌘2** | **Screenshot OCR** | Translate text from any area of your screen |
+| Interface | **Screenshot OCR** | Translate text from any area of your screen |
 | **Fn** | **Voice dictation** | Hold Fn, speak, release — recognized text types at your cursor |
-| **⇧Fn** | **Voice → Translate** | Speak in one language, get the translation in another |
+| Interface | **Voice → Translate** | Speak in one language, get the translation in another |
 | **🔇** | **Audio ducking** | System volume lowers during dictation so speakers don't bleed into the mic |
 | **🎨** | **Fully themeable** | Colors, blur, contrast, opacity — dark & light themes |
 | **🔑** | **BYOK** | OpenAI · DeepSeek · Claude · z.ai · Groq · auto-fallback to a backup key |

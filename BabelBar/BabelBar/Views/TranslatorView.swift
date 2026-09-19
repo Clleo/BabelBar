@@ -20,9 +20,6 @@ struct TranslatorView: View {
         }
         .background(
             ZStack {
-                // Hidden ⌘↵ shortcut to trigger translation.
-                Button("") { state.translate() }
-                    .keyboardShortcut(.return, modifiers: .command)
                 // Escape hides the window.
                 Button("") { state.onRequestClose?() }
                     .keyboardShortcut(.cancelAction)
@@ -220,8 +217,7 @@ struct TranslatorView: View {
         ZStack {
             HStack(spacing: 8) {
                 HStack(spacing: 3) {
-                    Text("⌘").font(.system(size: 10, weight: .semibold))
-                    Text("+ C + C").font(.system(size: 10, weight: .semibold))
+                    Text("fn").font(.system(size: 10, weight: .semibold))
                 }
                 .foregroundColor(Theme.accentPurple)
                 .padding(.horizontal, 7)
@@ -234,7 +230,7 @@ struct TranslatorView: View {
                     Capsule(style: .continuous)
                         .stroke(Theme.accentPurple.opacity(0.4), lineWidth: 1)
                 )
-                .hoverTip(state.t(.forQuickCopy))   // label moved into a hover tooltip
+                .hoverTip(state.t(.tipLiveDictation))   // label moved into a hover tooltip
 
                 Spacer()
 

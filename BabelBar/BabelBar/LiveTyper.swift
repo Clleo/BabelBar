@@ -1,175 +1,240 @@
 import AppKit
-import Carbon.HIToolbox
 
-// =============================================================================
-//  Live typing engine for streaming dictation (v3.0).
-//
-//  Prints recognition results straight into the frontmost app's text field as
-//  they arrive, revising only the not-yet-frozen tail:
-//
-//    target (String) — the FULL desired text of this dictation session, from
-//                      its first character to the current cursor position.
-//    frozen (Int)    — how many leading Characters may never be backspaced:
-//                      earlier sentences and everything the controller froze.
-//
-//  Rendering is a single diff of (what's on screen) vs (target): only the
-//  difference is erased with backspaces and re-typed, so the visible text
-//  stays stable and event traffic stays small. Updates are coalesced (a
-//  minimum interval between renders; intermediate states collapse into the
-//  newest one) and serialized on a private queue.
-//
-//  Every synthetic event has its flags cleared — same contract as
-//  `CursorTyping`: while the dictation hotkey is still held (⌘Fn), a stray
-//  modifier must never turn our keystrokes or backspaces into shortcuts.
-// =============================================================================
+/// Values and ranges use UTF-16, as required by the macOS Accessibility API.
+struct LiveFieldSnapshot: Equatable {
+    var value: String
+    var selection: NSRange
+}
 
+@MainActor
+protocol LiveTextTarget: AnyObject {
+    func snapshot() -> LiveFieldSnapshot?
+    func replace(_ range: NSRange, with text: String, expected: LiveFieldSnapshot) async -> LiveFieldSnapshot?
+}
+
+/// A target is bound to one AX element and process for its entire lifetime.
+/// No global Backspace or whole-field value replacement is used.
+@MainActor
+final class AXLiveTextTarget: LiveTextTarget {
+    let element: AXUIElement
+    let pid: pid_t
+    private let canSetText: Bool
+
+    init?() {
+        guard AXIsProcessTrusted(), let element = Self.focusedElement(),
+              let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier else { return nil }
+        self.element = element
+        self.pid = pid
+        var elementPID: pid_t = 0
+        guard AXUIElementGetPid(element, &elementPID) == .success, elementPID == pid else { return nil }
+        var canSelect = DarwinBoolean(false)
+        guard AXUIElementIsAttributeSettable(element, kAXSelectedTextRangeAttribute as CFString, &canSelect) == .success,
+              canSelect.boolValue else { return nil }
+        var settable = DarwinBoolean(false)
+        AXUIElementIsAttributeSettable(element, kAXSelectedTextAttribute as CFString, &settable)
+        canSetText = settable.boolValue
+        AXUIElementSetMessagingTimeout(element, 0.2)
+        guard snapshot() != nil else { return nil }
+    }
+
+    static func focusedElement() -> AXUIElement? {
+        var raw: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(AXUIElementCreateSystemWide(), kAXFocusedUIElementAttribute as CFString, &raw) == .success,
+              let raw, CFGetTypeID(raw) == AXUIElementGetTypeID() else { return nil }
+        return unsafeBitCast(raw, to: AXUIElement.self)
+    }
+
+    func snapshot() -> LiveFieldSnapshot? {
+        guard NSWorkspace.shared.frontmostApplication?.processIdentifier == pid,
+              let focused = Self.focusedElement(), CFEqual(focused, element) else { return nil }
+        var raw: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, kAXValueAttribute as CFString, &raw) == .success,
+              let value = raw as? String else { return nil }
+        guard AXUIElementCopyAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, &raw) == .success,
+              let raw, CFGetTypeID(raw) == AXValueGetTypeID() else { return nil }
+        var range = CFRange()
+        guard AXValueGetValue(unsafeBitCast(raw, to: AXValue.self), .cfRange, &range),
+              range.location >= 0, range.length >= 0,
+              range.location <= value.utf16.count, range.length <= value.utf16.count - range.location else { return nil }
+        return LiveFieldSnapshot(value: value, selection: NSRange(location: range.location, length: range.length))
+    }
+
+    private func select(_ range: NSRange) -> Bool {
+        var range = CFRange(location: range.location, length: range.length)
+        guard let value = AXValueCreate(.cfRange, &range) else { return false }
+        return AXUIElementSetAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, value) == .success
+    }
+
+    func replace(_ range: NSRange, with text: String, expected: LiveFieldSnapshot) async -> LiveFieldSnapshot? {
+        guard !Task.isCancelled, !text.isEmpty || canSetText, snapshot() == expected, select(range) else { return nil }
+        var current = LiveFieldSnapshot(value: expected.value, selection: range)
+        guard snapshot() == current else { return nil }
+        if canSetText {
+            guard AXUIElementSetAttributeValue(element, kAXSelectedTextAttribute as CFString, text as CFString) == .success else { return nil }
+            let next = Self.replacing(current, with: text)
+            return await acknowledge(next, replacing: range)
+        }
+        // Electron/browser editors may expose the selection but not an AX text
+        // setter. Replace the verified selection with process-targeted Unicode
+        // input, checking focus, value and caret before every chunk. Never delete
+        // relative to an unverified cursor, never retry a failed write blindly.
+        let chunks = Self.chunks(text)
+        guard !chunks.isEmpty else { return nil } // no safe empty replacement without AX setter
+        for chunk in chunks {
+            guard !Task.isCancelled, snapshot() == current else { return nil }
+            let units = Array(chunk.utf16)
+            guard let down = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: true),
+                  let up = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: false) else { return nil }
+            for event in [down, up] {
+                event.flags = []
+                event.setIntegerValueField(.eventSourceUserData, value: LiveInputGuard.marker)
+                event.keyboardSetUnicodeString(stringLength: units.count, unicodeString: units)
+                event.postToPid(pid)
+            }
+            let next = Self.replacing(current, with: chunk)
+            guard let acknowledged = await acknowledge(next) else { return nil }
+            current = acknowledged
+        }
+        return current
+    }
+
+    private func acknowledge(_ expected: LiveFieldSnapshot, replacing replacedRange: NSRange? = nil) async -> LiveFieldSnapshot? {
+        // Some editors apply AX/event writes on their next run-loop iteration.
+        for _ in 0..<12 {
+            guard !Task.isCancelled else { return nil }
+            if let current = snapshot() {
+                if current == expected { return expected }
+                // AX setters differ in whether they collapse the replacement.
+                // Collapse only our own replacement selection, after checking
+                // the exact resulting value; never move an unrelated caret.
+                if let replacedRange, current.value == expected.value {
+                    let inserted = NSRange(location: replacedRange.location,
+                                           length: expected.selection.location - replacedRange.location)
+                    if current.selection == replacedRange || current.selection == inserted {
+                        guard !Task.isCancelled, select(expected.selection) else { return nil }
+                        if snapshot() == expected { return expected }
+                    }
+                }
+            }
+            do { try await Task.sleep(nanoseconds: 5_000_000) } catch { return nil }
+        }
+        return nil
+    }
+
+    static func replacing(_ old: LiveFieldSnapshot, with text: String) -> LiveFieldSnapshot {
+        LiveFieldSnapshot(value: (old.value as NSString).replacingCharacters(in: old.selection, with: text),
+                          selection: NSRange(location: old.selection.location + text.utf16.count, length: 0))
+    }
+
+    static func chunks(_ text: String) -> [String] {
+        var result: [String] = [], chunk = ""
+        for character in text {
+            let next = String(character)
+            if !chunk.isEmpty, chunk.utf16.count + next.utf16.count > 16 { result.append(chunk); chunk = "" }
+            chunk += next // never split a surrogate pair or grapheme cluster
+        }
+        if !chunk.isEmpty { result.append(chunk) }
+        return result
+    }
+}
+
+/// Interrupt on actual typing/clicking, including an edit followed by undo that
+/// could otherwise leave the same AX value. Our own synthetic events are tagged.
+@MainActor
+final class LiveInputGuard {
+    static let marker: Int64 = 0x424142454C
+    private var global: Any?
+    private var local: Any?
+    func start(_ interrupt: @escaping () -> Void) {
+        stop()
+        let mask: NSEvent.EventTypeMask = [.keyDown, .leftMouseDown, .rightMouseDown, .otherMouseDown]
+        let handle: (NSEvent) -> Void = { event in
+            if event.cgEvent?.getIntegerValueField(.eventSourceUserData) != Self.marker { interrupt() }
+        }
+        global = NSEvent.addGlobalMonitorForEvents(matching: mask, handler: handle)
+        local = NSEvent.addLocalMonitorForEvents(matching: mask) { event in handle(event); return event }
+    }
+    func stop() {
+        if let global { NSEvent.removeMonitor(global) }; global = nil
+        if let local { NSEvent.removeMonitor(local) }; local = nil
+    }
+}
+
+/// Serial, acknowledged edits. A new freeze boundary only takes effect AFTER
+/// the corresponding replacement succeeds, even when updates are coalesced.
+@MainActor
 final class LiveTyper {
     static let shared = LiveTyper()
-    private init() {}
+    var onInvalidated: (() -> Void)?
+    private var target: LiveTextTarget?
+    private var expected: LiveFieldSnapshot?
+    private var origin = 0
+    private var initialLength = 0
+    private(set) var screen = ""
+    private var frozen = 0
+    private var desired = ""
+    private var desiredFrozen = 0
+    private var task: Task<Void, Never>?
+    private var epoch = 0
 
-    private let queue = DispatchQueue(label: "com.babelbar.livetyper", qos: .userInitiated)
-
-    // Rendered state (queue-confined): what is physically in the field now.
-    private var screen = ""
-    private var frozenLen = 0
-
-    // Newest desired state (written from the main thread, read on the queue).
-    private var latestTarget = ""
-    private var latestFrozen = 0
-
-    private var scheduled = false
-    private var lastRenderAt = Date.distantPast
-    /// Minimum spacing between renders — fast partial updates collapse instead
-    /// of hammering the target app with events.
-    private let minRenderInterval: TimeInterval = 0.15
-    private let typingChunkSize = 16   // UTF-16 units per event, as in CursorTyping
-
-    // MARK: - Public API (main thread)
-
-    /// Start a fresh session: forget everything printed before.
-    func reset() {
-        queue.async {
-            self.screen = ""
-            self.frozenLen = 0
-            self.latestTarget = ""
-            self.latestFrozen = 0
-        }
+    @discardableResult
+    func begin(target: LiveTextTarget) -> Bool {
+        cancel()
+        guard let snapshot = target.snapshot() else { return false }
+        self.target = target; expected = snapshot
+        origin = snapshot.selection.location; initialLength = snapshot.selection.length
+        screen = ""; frozen = 0; desired = ""; desiredFrozen = 0
+        return true
     }
 
-    /// Full desired session text, and how many leading Characters are frozen
-    /// (the caller guarantees the frozen prefix of `target` never changes —
-    /// so the typer will never backspace into it).
-    func render(target: String, frozen: Int) {
-        queue.async {
-            self.latestTarget = target
-            self.latestFrozen = frozen
-            self.scheduleNextRender()
-        }
-    }
+    func isCurrent() -> Bool { target?.snapshot() == expected && expected != nil }
 
-    /// Stop revising whatever is on screen: everything typed so far becomes
-    /// frozen. Used when the target app/field changes (TZ §16) — from that
-    /// moment BabelBar never sends a backspace into the old field again.
-    func freezeAll() {
-        queue.async {
-            self.frozenLen = self.screen.count
-            self.latestFrozen = self.frozenLen
-            self.latestTarget = self.screen
-        }
-    }
-
-    // MARK: - Rendering (private queue)
-
-    private func scheduleNextRender() {
-        guard !scheduled else { return }
-        scheduled = true
-        let delay = max(0, minRenderInterval - Date().timeIntervalSince(lastRenderAt))
-        queue.asyncAfter(deadline: .now() + delay) { [weak self] in
+    func render(target text: String, frozen boundary: Int) {
+        guard target != nil else { return }
+        desired = text; desiredFrozen = boundary
+        guard task == nil else { return }
+        let generation = epoch
+        task = Task { @MainActor [weak self] in
             guard let self else { return }
-            self.scheduled = false
-            self.performRender()
+            // Coalesce partials, not the final acknowledgement or ownership checks.
+            await Task.yield()
+            while !Task.isCancelled, self.epoch == generation {
+                let text = self.desired, boundary = self.desiredFrozen
+                guard await self.apply(text, boundary: boundary) else {
+                    if self.epoch == generation { self.cancel(); self.onInvalidated?() }
+                    return
+                }
+                if self.desired == text, self.desiredFrozen == boundary { break }
+            }
+            if self.epoch == generation { self.task = nil }
         }
     }
 
-    private func performRender() {
-        let target = latestTarget
-        let frozen = min(latestFrozen, screen.count)
+    func flush() async { await task?.value }
 
-        // Chars of the current screen that survive: the common prefix, but
-        // never less than the frozen boundary (a target that disagrees with
-        // frozen text loses — the screen keeps its version; TZ §16).
-        let prefix = Self.commonPrefixLength(screen, target)
-        let keep = max(prefix, frozen)
-
-        if keep < screen.count {
-            backspace(screen.count - keep)
-        }
-        let survivor = String(screen.prefix(keep))
-        let suffix = String(target.dropFirst(keep))
-        if !suffix.isEmpty {
-            type(suffix)
-        }
-        screen = survivor + suffix
-
-        lastRenderAt = Date()
-        if latestTarget != target || min(latestFrozen, screen.count) != frozen {
-            scheduleNextRender()   // a newer target arrived while we were typing
-        }
+    func cancel() {
+        epoch += 1; task?.cancel(); task = nil
+        target = nil; expected = nil
     }
 
-    // MARK: - Event synthesis
-
-    /// Unicode keystrokes in small chunks — a single giant event is silently
-    /// dropped by some apps (terminals / Electron). Flags cleared per event.
-    private func type(_ text: String) {
-        guard !text.isEmpty else { return }
-        let units = Array(text.utf16)
-        let src = CGEventSource(stateID: .combinedSessionState)
-        var i = 0
-        while i < units.count {
-            let slice = Array(units[i ..< min(i + typingChunkSize, units.count)])
-            guard let down = CGEvent(keyboardEventSource: src, virtualKey: 0, keyDown: true),
-                  let up = CGEvent(keyboardEventSource: src, virtualKey: 0, keyDown: false) else { break }
-            down.flags = []
-            up.flags = []
-            down.keyboardSetUnicodeString(stringLength: slice.count, unicodeString: slice)
-            up.keyboardSetUnicodeString(stringLength: slice.count, unicodeString: slice)
-            down.post(tap: .cghidEventTap)
-            up.post(tap: .cghidEventTap)
-            i += typingChunkSize
-            usleep(1500)
+    private func apply(_ text: String, boundary: Int) async -> Bool {
+        guard let target, let expected, target.snapshot() == expected else { return false }
+        guard Array(text.prefix(frozen)) == Array(screen.prefix(frozen)), text.count >= frozen else { return false }
+        let keep = Self.commonPrefixLength(screen, text)
+        if text != screen {
+            let prefix = String(screen.prefix(keep)).utf16.count
+            let range = NSRange(location: origin + prefix,
+                                length: screen.utf16.count - prefix + initialLength)
+            let generation = epoch
+            guard let next = await target.replace(range, with: String(text.dropFirst(keep)), expected: expected),
+                  !Task.isCancelled, generation == epoch else { return false }
+            self.expected = next; screen = text; initialLength = 0
         }
+        frozen = max(frozen, min(boundary, screen.count))
+        return true
     }
 
-    /// Plain backspaces (kVK_Delete = 0x33), one per *grapheme* — that is what
-    /// a real editor deletes per keypress. Flags cleared so a held modifier
-    /// can't turn this into ⌘⌫ / ⌥⌫ (delete-to-start-of-line/word).
-    private func backspace(_ count: Int) {
-        let src = CGEventSource(stateID: .combinedSessionState)
-        for _ in 0 ..< min(count, 400) {   // hard cap: never erase more than a screenful
-            guard let down = CGEvent(keyboardEventSource: src, virtualKey: 0x33, keyDown: true),
-                  let up = CGEvent(keyboardEventSource: src, virtualKey: 0x33, keyDown: false) else { break }
-            down.flags = []
-            up.flags = []
-            down.post(tap: .cghidEventTap)
-            up.post(tap: .cghidEventTap)
-            usleep(1200)
-        }
-    }
-
-    // MARK: - Pure helpers
-
-    /// Longest common prefix of two strings, in Characters (grapheme
-    /// clusters): one backspace deletes one grapheme.
     static func commonPrefixLength(_ a: String, _ b: String) -> Int {
-        var n = 0
-        var ia = a.startIndex
-        var ib = b.startIndex
-        while ia < a.endIndex, ib < b.endIndex, a[ia] == b[ib] {
-            n += 1
-            a.formIndex(after: &ia)
-            b.formIndex(after: &ib)
-        }
-        return n
+        zip(a, b).prefix(while: { $0 == $1 }).count
     }
 }

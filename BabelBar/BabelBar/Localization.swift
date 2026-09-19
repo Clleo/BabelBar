@@ -74,7 +74,7 @@ enum LKey: String {
     case spokenForm, writtenForm, addRule, removeRule, resetStatistics
     case timesSeenFmt, dismiss, noSuggestions, suggestionsHint
     case tipLiveDictation, tipLiveOnDevice, tipDevDictionary, tipPersonalDict, tipLearn, tipFreq
-    case errSpeechDenied, errSpeechUnavailable, errSpeechOnDevice
+    case errSpeechDenied, errSpeechUnavailable, errSpeechOnDevice, errLiveField
 }
 
 enum Loc {
@@ -94,6 +94,7 @@ enum Loc {
     }
 
     private static let table: [LKey: [String]] = [
+        .errLiveField: ["Place the cursor in an editable text field and allow Accessibility access.", "Поставьте курсор в редактируемое поле и разрешите Универсальный доступ."],
         .settingsTitle: r("BabelBar Settings", "Настройки BabelBar", "BabelBar-Einstellungen",
                           "Ajustes de BabelBar", "Réglages BabelBar", "Impostazioni BabelBar", "Configurações do BabelBar"),
 
@@ -582,13 +583,13 @@ enum Loc {
                             "Le correzioni identiche ripetute appaiono qui.",
                             "Correções idênticas repetidas aparecem aqui."),
         .tipLiveDictation: r(
-            "Hold the hotkey (or tap to start, tap to stop) and speak — text appears live in the field you're typing in, in any app. Pauses freeze what's typed: you can edit by hand and continue from a new spot.\n\nUses Apple speech recognition (on-device when the language supports it). Needs Microphone and Speech Recognition permissions, plus Accessibility for typing. Fn-based shortcuts need Fn set to “Do Nothing” in System Settings → Keyboard.",
-            "Удерживай хоткей (или тапни для старта и ещё раз для остановки) и говори — текст появляется прямо в поле, где стоит курсор, в любом приложении. Пауза замораживает напечатанное: можно поправить руками и продолжить с нового места.\n\nИспользует распознавание речи Apple (локально, если язык поддерживается). Нужны разрешения «Микрофон», «Распознавание речи» и «Универсальный доступ» для печати. Для комбо с Fn поставь Fn на «Не выполнять действий» в Системных настройках → Клавиатура.",
-            "Halte das Kürzel gedrückt (oder tippe zum Starten und nochmals zum Stoppen) und sprich — der Text erscheint live im Feld, in dem du tippst, in jeder App. Pausen frieren das Geschriebene ein: du kannst von Hand korrigieren und an neuer Stelle weitermachen.\n\nNutzt die Apple-Spracherkennung (lokal, wenn die Sprache unterstützt wird). Benötigt Mikrofon, Spracherkennung und Bedienungshilfen. Für Fn-Kürzel stelle Fn auf „Nichts tun“ in Systemeinstellungen → Tastatur.",
-            "Mantén el atajo (o toca para empezar y otra vez para parar) y habla: el texto aparece en vivo en el campo donde escribes, en cualquier app. Las pausas congelan lo escrito: puedes corregir a mano y continuar desde otro punto.\n\nUsa el reconocimiento de voz de Apple (local si el idioma lo permite). Necesita Micrófono, Reconocimiento de voz y Accesibilidad. Para combinaciones con Fn, pon Fn en «No hacer nada» en Ajustes del Sistema → Teclado.",
-            "Maintenez le raccourci (ou touchez pour démarrer, re-touchez pour arrêter) et parlez — le texte apparaît en direct dans le champ où vous tapez, dans toute app. Les pauses figent le texte saisi : vous pouvez corriger à la main et continuer ailleurs.\n\nUtilise la reconnaissance vocale d’Apple (sur l’appareil si la langue le permet). Nécessite Microphone, Reconnaissance vocale et Accessibilité. Pour les raccourcis avec Fn, réglez Fn sur « Ne rien faire » dans Réglages Système → Clavier.",
-            "Tieni premuta la scorciatoia (o tocca per iniziare e di nuovo per fermarti) e parla: il testo appare in diretta nel campo in cui stai scrivendo, in qualsiasi app. Le pause bloccano il testo digitato: puoi correggere a mano e riprendere da un altro punto.\n\nUsa il riconoscimento vocale di Apple (in locale se la lingua è supportata). Richiede Microfono, Riconoscimento vocale e Accessibilità. Per le combinazioni con Fn, imposta Fn su «Non fare nulla» in Impostazioni di Sistema → Tastiera.",
-            "Segure o atalho (ou toque para começar e de novo para parar) e fale — o texto aparece ao vivo no campo em que você está digitando, em qualquer app. Pausas congelam o digitado: você pode corrigir à mão e continuar de outro ponto.\n\nUsa o reconhecimento de fala da Apple (no dispositivo, se o idioma suportar). Requer Microfone, Reconhecimento de Fala e Acessibilidade. Para atalhos com Fn, defina Fn como «Não fazer nada» em Ajustes do Sistema → Teclado."),
+            "Tap Fn to start dictation; tap again to stop. You can also hold Fn while speaking. Text appears in the active editable field. Typing, clicking or changing fields ends the session; press Fn again to continue at the new cursor position. Requires Microphone, Speech Recognition and Accessibility. Set Fn to “Do Nothing” in System Settings → Keyboard.",
+            "Нажмите Fn, чтобы начать диктовку, и ещё раз — чтобы остановить. Можно также удерживать Fn во время речи. Текст появляется в активном редактируемом поле. Ручной ввод, щелчок мышью или смена поля завершают сессию; нажмите Fn снова, чтобы продолжить с новой позиции курсора. Нужны Микрофон, Распознавание речи и Универсальный доступ. В Системных настройках → Клавиатура установите для Fn «Не выполнять действий».",
+            "Drücke Fn zum Starten und erneut zum Stoppen. Du kannst Fn auch beim Sprechen halten. Texteingabe, Klicks oder Feldwechsel beenden die Sitzung. Drücke Fn erneut, um am neuen Cursor fortzufahren. Mikrofon, Spracherkennung und Bedienungshilfen müssen erlaubt sein.",
+            "Pulsa Fn para iniciar y otra vez para detener el dictado. También puedes mantener Fn pulsado. Escribir, hacer clic o cambiar de campo termina la sesión. Pulsa Fn para continuar desde el nuevo cursor. Requiere Micrófono, Reconocimiento de voz y Accesibilidad.",
+            "Appuyez sur Fn pour démarrer, puis à nouveau pour arrêter. Vous pouvez aussi maintenir Fn. Une saisie manuelle, un clic ou un changement de champ termine la session. Appuyez sur Fn pour reprendre au nouveau curseur. Microphone, reconnaissance vocale et accessibilité requis.",
+            "Premi Fn per iniziare e di nuovo per fermare la dettatura. Puoi anche tenere premuto Fn. Scrivere, fare clic o cambiare campo termina la sessione. Premi Fn per continuare dal nuovo cursore. Sono richiesti microfono, riconoscimento vocale e accessibilità.",
+            "Pressione Fn para iniciar e novamente para parar. Também pode segurar Fn enquanto fala. Digitar, clicar ou mudar de campo encerra a sessão. Pressione Fn para continuar no novo cursor. Requer Microfone, Reconhecimento de Fala e Acessibilidade."),
         .tipLiveOnDevice: r(
             "Live dictation prefers on-device recognition: offline, private, and with no time limit. When the language has no on-device model, recognition goes through Apple's servers — unless you enable this switch, which then refuses to start instead.",
             "Живая диктовка предпочитает локальное распознавание: офлайн, приватно и без ограничения по времени. Если у языка нет локальной модели, распознавание пойдёт через серверы Apple — если не включить этот переключатель: тогда приложение просто не начнёт сессию.",

@@ -16,13 +16,12 @@ The app needs these macOS permissions (System Settings → Privacy & Security):
 - **Accessibility** — to send synthetic ⌘C for "translate selection".
 - **Screen Recording** — for the screenshot OCR hotkey.
 
-## Hotkeys
-- `⌥ + L` — open BabelBar
-- `⌘ + C + C` (double Cmd-C) — translate the current selection
-- `⇧ + ⌘ + 2` — capture a screen region, OCR it, translate
-- `⌘ + Return` — translate the input field
-- `Fn` — dictate, insert at cursor
-- `Shift + Fn` — dictate, then translate the recognized text
+## Hotkey (3.0.1)
+- **Fn** — start live dictation; press again to stop. Hold-to-talk also works.
+- All other shortcut assignments are cleared, including saved assignments from older versions.
+- Manual typing, a click or a focus change ends the session. Press Fn to resume at the current cursor.
+- In System Settings → Keyboard, set Fn to “Do Nothing”.
+- Live dictation needs Microphone, Speech Recognition and Accessibility permissions. The target editor must expose its text and selection through Accessibility.
 
 ## Translation API
 Open **Settings (gear icon)** → API Settings. Choose a provider:

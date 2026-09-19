@@ -64,6 +64,7 @@ final class HotKeyManager {
     }
 
     private func register(combo: KeyCombo, id: UInt32, ref: inout EventHotKeyRef?) {
+        guard combo.isAssigned else { return }
         let hotKeyID = EventHotKeyID(signature: OSType(0x54424152), id: id) // 'TBAR'
         RegisterEventHotKey(combo.keyCode, combo.carbonModifiers, hotKeyID,
                             GetApplicationEventTarget(), 0, &ref)
@@ -88,7 +89,7 @@ final class HotKeyManager {
     // MARK: - Double-tap monitor (Translate selection)
 
     private func registerDoubleTapMonitor() {
-        guard let combo = appState?.settings.selectionHotKey else { return }
+        guard let combo = appState?.settings.selectionHotKey, combo.isAssigned else { return }
         let wantMods = combo.eventModifiers.intersection([.command, .shift, .option, .control])
 
         globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in

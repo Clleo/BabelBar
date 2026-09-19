@@ -40,3 +40,6 @@ BabelBar/dmg/background.tiff
 
 # Claude Code local config / worktrees
 .claude/
+
+# Local application rollback copies
+.local-backups/

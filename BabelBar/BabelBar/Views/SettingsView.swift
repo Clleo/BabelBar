@@ -586,14 +586,6 @@ struct SettingsView: View {
     }
 
     @ViewBuilder private var voiceRows: some View {
-            row(state.t(.dictateToCursor),
-                help: state.t(.tipDictate)) {
-                ModifierComboRecorder(combo: $state.settings.dictateHotkey, recordingPrompt: state.t(.recordModifiers)) { state.saveSettings() }
-            }
-            row(state.t(.translateAtCursor),
-                help: state.t(.tipTranslateAtCursor)) {
-                ModifierComboRecorder(combo: $state.settings.translateDictateHotkey, recordingPrompt: state.t(.recordModifiers)) { state.saveSettings() }
-            }
             row(state.t(.showRecordingDot), help: state.t(.tipShowRecordingDot)) {
                 CapsuleToggle(isOn: Binding(
                     get: { state.settings.showRecordingDot },
@@ -672,11 +664,7 @@ struct SettingsView: View {
 
             row(state.t(.liveDictation), help: state.t(.tipLiveDictation)) {
                 HStack(spacing: 10) {
-                    ModifierComboRecorder(combo: $state.settings.liveDictateHotkey,
-                                          recordingPrompt: state.t(.recordModifiers)) {
-                        state.saveSettings()
-                        VoiceHotkeys.shared.refreshBindings()
-                    }
+                    Text("fn").font(.system(size: 12, weight: .semibold, design: .monospaced))
                     CapsuleToggle(isOn: Binding(
                         get: { state.settings.liveDictationEnabled },
                         set: { state.settings.liveDictationEnabled = $0; state.saveSettings()
@@ -937,19 +925,6 @@ struct SettingsView: View {
                     get: { state.settings.showMenuBarIcon },
                     set: { state.settings.showMenuBarIcon = $0; state.saveSettings(); state.onMenuBarVisibilityChanged?($0) }
                 ))
-            }
-
-            row(state.t(.openBabelBar),
-                help: state.t(.tipOpen)) {
-                HotKeyRecorder(combo: $state.settings.openHotKey, recordingPrompt: state.t(.recordKeys), onChange: applyHotKeys)
-            }
-            row(state.t(.translateAuto),
-                help: state.t(.tipTranslateAuto)) {
-                HotKeyRecorder(combo: $state.settings.selectionHotKey, doubleTap: true, recordingPrompt: state.t(.recordKeys), onChange: applyHotKeys)
-            }
-            row(state.t(.translateScreenshot),
-                help: state.t(.tipScreenshot)) {
-                HotKeyRecorder(combo: $state.settings.screenshotHotKey, recordingPrompt: state.t(.recordKeys), onChange: applyHotKeys)
             }
 
             row(state.t(.interfaceLanguage)) {

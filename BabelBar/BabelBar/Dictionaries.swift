@@ -447,7 +447,7 @@ final class PersonalDictionaryStore: ObservableObject {
 /// biasing the Cyrillic spoken forms would push the recognizer toward printing
 /// transliterations, the opposite of what we want.
 enum DictionaryContext {
-    static func contextualStrings(personal: [DictEntry], limit: Int = 150) -> [String] {
+    static func contextualStrings(personal: [DictEntry], developerEnabled: Bool = true, frequencyEnabled: Bool = true, limit: Int = 150) -> [String] {
         var seen = Set<String>()
         var out: [String] = []
         func push(_ s: String) {
@@ -457,11 +457,11 @@ enum DictionaryContext {
             out.append(s)
         }
         // Personal rules carry the user's vocabulary — highest priority.
-        for e in personal where e.enabled { push(e.written); push(e.spoken) }
+        for e in personal where e.enabled { push(e.written) }
         // Then frequency-ranked terms (what this user actually dictates).
-        for term in FrequencyTracker.topTerms(limit: 60) { push(term) }
+        if frequencyEnabled { for term in FrequencyTracker.topTerms(limit: 60) { push(term) } }
         // Then the built-in dictionary.
-        for term in DeveloperDictionary.terms { push(term) }
+        if developerEnabled { for term in DeveloperDictionary.terms { push(term) } }
         return Array(out.prefix(limit))
     }
 }
@@ -479,79 +479,53 @@ enum DictionaryContext {
 /// editors) simply yield nothing — learning silently stays off there. Reading
 /// happens only for the field the user dictated into, only while this feature
 /// is enabled in Settings.
+@MainActor
 enum CorrectionObserver {
-    /// In-memory snapshot from the previous live session. Never persisted.
-    private static var snapshot: (bundleID: String, value: String, typed: String)?
+    private struct Snapshot {
+        let element: AXUIElement
+        let pid: pid_t
+        let value: String
+        let typed: String
+        let range: NSRange
+    }
+    private static var snapshot: Snapshot?
 
-    /// Called when a live session ends. `typed` = the final text BabelBar
-    /// printed into the field this session.
-    static func noteSessionEnded(typed: String) {
-        guard !typed.isEmpty, let value = focusedFieldValue() else {
-            snapshot = nil
-            return
-        }
-        snapshot = (frontmostBundleID(), value, typed)
+    static func noteSessionEnded(typed: String, target: AXLiveTextTarget) {
+        guard !typed.isEmpty, let field = target.snapshot(), field.selection.length == 0,
+              field.selection.location >= typed.utf16.count else { snapshot = nil; return }
+        let range = NSRange(location: field.selection.location - typed.utf16.count, length: typed.utf16.count)
+        guard (field.value as NSString).substring(with: range) == typed else { snapshot = nil; return }
+        snapshot = Snapshot(element: target.element, pid: target.pid, value: field.value, typed: typed, range: range)
     }
 
-    /// Called when the next live session begins. If the field we dictated into
-    /// last time no longer contains our text verbatim, someone edited it.
-    static func checkPreviousSessionCorrection() {
+    static func checkPreviousSessionCorrection(target: AXLiveTextTarget) {
         guard let snap = snapshot else { return }
         snapshot = nil
-        guard snap.bundleID == frontmostBundleID(), let now = focusedFieldValue() else { return }
-        if now.contains(snap.typed) { return }   // untouched — nothing to learn
-        if let fix = extractCorrection(oldValue: snap.value, typed: snap.typed, newValue: now) {
-            Task { @MainActor in
-                PersonalDictionaryStore.shared.proposeCandidate(spoken: fix.spoken, written: fix.written)
-            }
+        guard snap.pid == target.pid, CFEqual(snap.element, target.element), let field = target.snapshot() else { return }
+        if let fix = extractCorrection(oldValue: snap.value, typed: snap.typed, newValue: field.value, ownedRange: snap.range) {
+            PersonalDictionaryStore.shared.proposeCandidate(spoken: fix.spoken, written: fix.written)
         }
     }
-
     static func forget() { snapshot = nil }
 
     /// Word anchors around the typed fragment locate its replacement in the
     /// edited value. Returns nil when the change can't be attributed to our
     /// text (e.g. the user rewrote the whole field, or anchors aren't found).
     static func extractCorrection(oldValue: String, typed: String,
-                                  newValue: String) -> (spoken: String, written: String)? {
-        guard let range = oldValue.range(of: typed) else { return nil }
-        let before = oldValue[..<range.lowerBound]
-        let after = oldValue[range.upperBound...]
-
-        func wordsTail(_ s: Substring) -> [String] {
-            Array(s.split(whereSeparator: \.isWhitespace).suffix(2).map(String.init))
-        }
-        func wordsHead(_ s: Substring) -> [String] {
-            Array(s.split(whereSeparator: \.isWhitespace).prefix(2).map(String.init))
-        }
-        let leftAnchor = wordsTail(before)
-        let rightAnchor = wordsHead(after)
-        let typedWords = typed.split(whereSeparator: \.isWhitespace).map(String.init)
-        guard !typedWords.isEmpty else { return nil }
-
-        // Locate the anchored window in the new value.
-        var searchRange = newValue.startIndex..<newValue.endIndex
-        var windowStart: String.Index?
-        for word in leftAnchor {
-            guard let r = newValue.range(of: word, range: searchRange) else { return nil }
-            windowStart = r.upperBound
-            searchRange = r.upperBound..<newValue.endIndex
-        }
-        var windowEnd: String.Index?
-        let anchorStart = windowStart ?? newValue.startIndex
-        if !rightAnchor.isEmpty {
-            var r = anchorStart..<newValue.endIndex
-            for word in rightAnchor {
-                guard let found = newValue.range(of: word, range: r) else { return nil }
-                windowEnd = found.lowerBound
-                r = found.upperBound..<newValue.endIndex
-                break   // first right-anchor word is enough
-            }
-        }
-        let lower = windowStart ?? newValue.startIndex
-        let upper = windowEnd ?? newValue.endIndex
-        guard lower <= upper else { return nil }
-        let replacement = String(newValue[lower ..< upper])
+                                  newValue: String, ownedRange: NSRange? = nil) -> (spoken: String, written: String)? {
+        let old = oldValue as NSString
+        let range = ownedRange ?? old.range(of: typed)
+        guard range.location != NSNotFound, range.location >= 0, range.length >= 0,
+              range.location <= old.length, range.length <= old.length - range.location,
+              old.substring(with: range) == typed else { return nil }
+        let before = old.substring(to: range.location)
+        let after = old.substring(from: NSMaxRange(range))
+        // Only accept a change inside our exact range. Edits outside it, another
+        // field, or ambiguous repeated anchors must never become dictionary rules.
+        guard newValue.hasPrefix(before), newValue.hasSuffix(after),
+              newValue.utf16.count >= before.utf16.count + after.utf16.count else { return nil }
+        let replacement = (newValue as NSString).substring(with: NSRange(location: before.utf16.count,
+            length: newValue.utf16.count - before.utf16.count - after.utf16.count))
             .trimmingCharacters(in: .whitespacesAndNewlines)
 
         // Sanity gates: non-empty, letters present, plausibly a rewrite of `typed`
@@ -560,7 +534,6 @@ enum CorrectionObserver {
               replacement.contains(where: \.isLetter),
               replacement.count <= max(8, typed.count * 3) else { return nil }
         let spoken = typed.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard spoken.count <= 80 else { return nil }   // don't learn from giant fragments
 
         // The user usually fixes one word of the dictated span, not the span —
         // refine to the differing middle ("сделай компонент" → "создай компонент"
@@ -578,28 +551,9 @@ enum CorrectionObserver {
         let spokenMid = spokenWords[head ..< spokenWords.count - tail].joined(separator: " ")
         let writtenMid = writtenWords[head ..< writtenWords.count - tail].joined(separator: " ")
         guard !spokenMid.isEmpty, !writtenMid.isEmpty, spokenMid != writtenMid,
+              spokenMid.count <= 80, writtenMid.count <= 80,
               writtenMid.contains(where: \.isLetter) else { return nil }
         return (spokenMid, writtenMid)
     }
 
-    // MARK: - AX plumbing
-
-    private static func frontmostBundleID() -> String {
-        NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? ""
-    }
-
-    /// Value of the system-wide focused UI element when it is a text field that
-    /// exposes its contents. Capped so a huge document can't stall the read.
-    private static func focusedFieldValue() -> String? {
-        let system = AXUIElementCreateSystemWide()
-        var focused: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(system, kAXFocusedUIElementAttribute as CFString, &focused) == .success,
-              let rawFocused = focused else { return nil }
-        let element = unsafeBitCast(rawFocused, to: AXUIElement.self)
-        var value: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(element, kAXValueAttribute as CFString, &value) == .success,
-              let text = value as? String else { return nil }
-        guard text.count <= 100_000 else { return nil }
-        return text
-    }
 }
