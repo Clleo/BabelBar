@@ -17,7 +17,7 @@ The app needs these macOS permissions (System Settings → Privacy & Security):
 - **Screen Recording** — for the screenshot OCR hotkey.
 
 ## Hotkeys
-- `⌥ + Space` — open BabelBar
+- `⌥ + L` — open BabelBar
 - `⌘ + C + C` (double Cmd-C) — translate the current selection
 - `⇧ + ⌘ + 2` — capture a screen region, OCR it, translate
 - `⌘ + Return` — translate the input field
