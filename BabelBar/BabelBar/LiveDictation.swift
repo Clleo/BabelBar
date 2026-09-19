@@ -270,6 +270,12 @@ final class LiveDictationController {
     private let wordSettleDelay: TimeInterval = 0.45
     private var settleTimer: DispatchWorkItem?
 
+    /// Last time a recognition result arrived. The watchdog uses it: speech at
+    /// the mic but no results for seconds means the request is stalled (a
+    /// warm-up download, a request that died without an error callback).
+    private var lastPartialAt = Date.distantPast
+    private var watchdogTimer: DispatchWorkItem?
+
     private var appObserver: Any?
 
     // MARK: - Session lifecycle
@@ -331,11 +337,18 @@ final class LiveDictationController {
             fail(.errSpeechOnDevice, onError)
             return
         }
+        // Forcing on-device whenever the locale *supports* it stalled the whole
+        // first session: the model downloads on first use and the request stays
+        // silent until it's ready — the user saw nothing until they stopped.
+        // By default the engine choice is left to Apple (on-device once warm,
+        // server otherwise — instant partials matter more); the settings toggle
+        // pins it to on-device for privacy-minded users.
+        let forceOnDevice = settings?.liveOnDeviceOnly == true
 
         let streamer = AppleSpeechStreamer(
             recognizer: recognizer,
             contextual: DictionaryContext.contextualStrings(personal: PersonalDictionaryStore.shared.entries),
-            requiresOnDevice: onDevice)
+            requiresOnDevice: forceOnDevice)
         streamer.onPartial = { [weak self] utterance, isFinal in
             DispatchQueue.main.async { self?.ingest(utterance: utterance, isFinal: isFinal) }
         }
@@ -383,7 +396,28 @@ final class LiveDictationController {
         }
 
         streamer.start()
+        lastPartialAt = Date()
+        armWatchdog()
         phase = .listening
+    }
+
+    /// While the user is speaking but no results arrive for a few seconds,
+    /// restart the request — the replay ring re-feeds the new one, so nothing
+    /// already said is lost. This is what keeps "text while speaking" true even
+    /// when a request stalls silently.
+    private func armWatchdog() {
+        watchdogTimer?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, self.phase == .listening else { return }
+            if MicLevel.shared.level > 0.04,
+               Date().timeIntervalSince(self.lastPartialAt) > 4 {
+                self.lastPartialAt = Date()
+                self.streamer?.restartNow()
+            }
+            self.armWatchdog()
+        }
+        watchdogTimer = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0, execute: work)
     }
 
     /// New recognition result. The volatile span is everything the recognizer
@@ -391,6 +425,7 @@ final class LiveDictationController {
     /// dictionaries and rendered with the trailing word held back.
     private func ingest(utterance: String, isFinal: Bool) {
         guard phase == .listening || phase == .finishing else { return }
+        lastPartialAt = Date()
         let utteranceTok = Self.tokens(utterance)
         lastUtteranceTokens = utteranceTok
 
@@ -416,6 +451,9 @@ final class LiveDictationController {
                 echo += 1
             }
             if echo > 0 { spanTokens.removeFirst(echo) }
+            // The match chain broke before the settled tail ran out: speech has
+            // moved past the echo — stop skipping on the following partials.
+            if echo < tail.count { skipReplayEcho = false }
         }
         var corrected = TranscriptCorrector.correct(spanTokens.joined(separator: " "), rules: rules)
         // Spoken punctuation / new lines work in live dictation too ("точка",
@@ -555,6 +593,7 @@ final class LiveDictationController {
     }
 
     private func teardown() {
+        watchdogTimer?.cancel(); watchdogTimer = nil
         if let appObserver {
             NotificationCenter.default.removeObserver(appObserver)
             self.appObserver = nil

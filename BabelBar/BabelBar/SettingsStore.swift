@@ -148,7 +148,7 @@ struct AppSettings: Codable {
     var screenshotHotKey = KeyCombo(keyCode: 19, command: true, shift: true)                  // ⇧ ⌘ 2
 
     // Voice shortcuts (modifier-only, e.g. Fn / Shift+Fn).
-    var dictateHotkey = ModifierCombo(fn: true)                 // dictate at cursor
+    var dictateHotkey = ModifierCombo()                         // Whisper dictation — unbound since 3.0 (live took Fn)
     var translateDictateHotkey = ModifierCombo(fn: true, shift: true)  // dictate → translate → insert at cursor
     var voiceInputEnabled = true    // master switch for the whole voice-input feature
     var voiceSoundEnabled = true
@@ -171,10 +171,10 @@ struct AppSettings: Codable {
     var whisperModel: WhisperModel = .base
     var insertMethod: InsertMethod = .paste
 
-    // Live (streaming) dictation — v3.0. Separate hotkey so the Whisper modes
-    // (Fn / Shift+Fn) keep working exactly as before.
+    // Live (streaming) dictation — v3.0. Own hotkey; since the 3.0 default swap
+    // it lives on Fn, the Whisper dictation above starts unbound.
     var liveDictationEnabled = true
-    var liveDictateHotkey = ModifierCombo(fn: true, command: true)   // ⌘Fn
+    var liveDictateHotkey = ModifierCombo(fn: true)   // Fn
     var liveDictationLanguage: LiveDictationLanguage = .ru
     /// Refuse to start live dictation when the locale has no on-device model
     /// (otherwise recognition would go through Apple's servers).
@@ -267,6 +267,7 @@ enum SettingsStore {
     private static let demoBaseline = 124_500
     private static let openHotKeyMigrationKey = "babelbar.openHotKeyOptLMigrated"
     private static let groqModelMigrationKey = "babelbar.groqLlama33Migrated"
+    private static let liveFnMigrationKey = "babelbar.liveFnMigrated"
     /// Groq decommissioned this model on 2026-08-16; every request now fails with
     /// "model does not exist". Only this exact id is replaced, so a user's own choice stays.
     private static let deadGroqModel = "llama-3.3-70b-versatile"
@@ -315,6 +316,19 @@ enum SettingsStore {
             }
             if changed { save(s) }
             UserDefaults.standard.set(true, forKey: groqModelMigrationKey)
+        }
+        // One-time 3.0 default swap: live dictation takes Fn, the old Whisper
+        // dictation starts unbound. Only the exact old defaults are moved, so
+        // any user customization of either combo survives untouched.
+        if !UserDefaults.standard.bool(forKey: liveFnMigrationKey) {
+            if hadSaved,
+               s.dictateHotkey == ModifierCombo(fn: true),
+               s.liveDictateHotkey == ModifierCombo(fn: true, command: true) {
+                s.dictateHotkey = AppSettings().dictateHotkey
+                s.liveDictateHotkey = AppSettings().liveDictateHotkey
+                save(s)
+            }
+            UserDefaults.standard.set(true, forKey: liveFnMigrationKey)
         }
         return s
     }
