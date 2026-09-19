@@ -37,6 +37,14 @@ final class AXLiveTextTarget: LiveTextTarget {
         guard snapshot() != nil else { return nil }
     }
 
+    /// Asks an app to expose its accessibility tree (Electron: AXManualAccessibility,
+    /// Chromium/WebKit: AXEnhancedUserInterface). Native editors ignore both.
+    static func requestAccessibilityTree(pid: pid_t) {
+        let app = AXUIElementCreateApplication(pid)
+        AXUIElementSetAttributeValue(app, "AXManualAccessibility" as CFString, kCFBooleanTrue)
+        AXUIElementSetAttributeValue(app, "AXEnhancedUserInterface" as CFString, kCFBooleanTrue)
+    }
+
     static func focusedElement() -> AXUIElement? {
         var raw: CFTypeRef?
         guard AXUIElementCopyAttributeValue(AXUIElementCreateSystemWide(), kAXFocusedUIElementAttribute as CFString, &raw) == .success,
@@ -99,8 +107,11 @@ final class AXLiveTextTarget: LiveTextTarget {
     }
 
     private func acknowledge(_ expected: LiveFieldSnapshot, replacing replacedRange: NSRange? = nil) async -> LiveFieldSnapshot? {
-        // Some editors apply AX/event writes on their next run-loop iteration.
-        for _ in 0..<12 {
+        // Some editors apply AX/event writes on their next run-loop iteration;
+        // browsers and Electron can take a few hundred milliseconds. Waiting
+        // costs nothing, giving up ends the whole session.
+        let deadline = Date().addingTimeInterval(0.6)
+        while Date() < deadline {
             guard !Task.isCancelled else { return nil }
             if let current = snapshot() {
                 if current == expected { return expected }
@@ -116,7 +127,7 @@ final class AXLiveTextTarget: LiveTextTarget {
                     }
                 }
             }
-            do { try await Task.sleep(nanoseconds: 5_000_000) } catch { return nil }
+            do { try await Task.sleep(nanoseconds: 8_000_000) } catch { return nil }
         }
         return nil
     }

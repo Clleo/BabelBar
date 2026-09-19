@@ -243,7 +243,15 @@ final class LiveDictationController {
     private var reportError: ((LKey) -> Void)?
 
     func start(settings: AppSettings, onError: @escaping (LKey) -> Void) {
-        if phase == .finishing { abort() }
+        // The hotkey state machine just began a new session. A press that finds a
+        // session already listening means "stop"; resync the machine so the next
+        // press starts cleanly instead of running one step out of phase.
+        if phase == .listening || phase == .starting {
+            stop()
+            VoiceHotkeys.shared.cancelActiveSession()
+            return
+        }
+        if phase == .finishing { abort(resetHotkeys: false) }
         guard phase == .idle else { return }
         phase = .starting; session = UUID()
         let id = session
@@ -256,7 +264,7 @@ final class LiveDictationController {
                 Task { @MainActor in
                     guard self.session == id, self.phase == .starting else { return }
                     guard status == .authorized else { self.abort(error: .errSpeechDenied); return }
-                    self.beginSession()
+                    self.acquireTarget(session: id)
                 }
             }
         }
@@ -285,22 +293,37 @@ final class LiveDictationController {
         }
     }
 
-    private func beginSession() {
-        guard let settings else { abort(); return }
-        guard let target = AXLiveTextTarget(), typer.begin(target: target) else {
-            abort(error: .errLiveField); return
+    /// Electron and Chromium editors publish their accessibility tree only after a
+    /// client asks for it, and the tree needs a moment to appear. Ask once, then
+    /// poll briefly instead of failing on the first empty answer.
+    private func acquireTarget(session id: UUID, attempt: Int = 0) {
+        guard session == id, phase == .starting else { return }
+        if let target = AXLiveTextTarget(), typer.begin(target: target) { beginSession(target: target); return }
+        guard attempt < 10, AXIsProcessTrusted() else { abort(error: .errLiveField); return }
+        if attempt == 0, let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier {
+            AXLiveTextTarget.requestAccessibilityTree(pid: pid)
         }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) { [weak self] in
+            self?.acquireTarget(session: id, attempt: attempt + 1)
+        }
+    }
+
+    private func beginSession(target: AXLiveTextTarget) {
+        guard let settings else { abort(); return }
         self.target = target
         if settings.learnFromCorrections { CorrectionObserver.checkPreviousSessionCorrection(target: target) }
         else { CorrectionObserver.forget() }
         guard let recognizer = SFSpeechRecognizer(locale: settings.liveDictationLanguage.locale), recognizer.isAvailable else {
             abort(error: .errSpeechUnavailable); return
         }
-        if settings.liveOnDeviceOnly, !recognizer.supportsOnDeviceRecognition { abort(error: .errSpeechOnDevice); return }
+        // Local recognition whenever the system has the model: no network round trip,
+        // partials arrive faster. The server is only a fallback when the setting allows it.
+        let onDevice = recognizer.supportsOnDeviceRecognition
+        if settings.liveOnDeviceOnly, !onDevice { abort(error: .errSpeechOnDevice); return }
         let streamer = AppleSpeechStreamer(recognizer: recognizer,
             contextual: DictionaryContext.contextualStrings(personal: PersonalDictionaryStore.shared.entries,
                          developerEnabled: settings.developerDictionaryEnabled, frequencyEnabled: settings.frequencyLearningEnabled),
-            requiresOnDevice: settings.liveOnDeviceOnly)
+            requiresOnDevice: onDevice)
         let id = session
         streamer.onPartial = { [weak self] text, timed, final in
             guard let self, self.session == id, self.phase == .listening else { return }
@@ -375,13 +398,13 @@ final class LiveDictationController {
         }
     }
 
-    private func abort(error: LKey? = nil) {
+    private func abort(error: LKey? = nil, resetHotkeys: Bool = true) {
         guard phase != .idle else { return }
         let callback = reportError
         session = UUID(); finishingTask?.cancel(); finishingTask = nil
         teardown(); phase = .idle
         CorrectionObserver.forget()
-        VoiceHotkeys.shared.cancelActiveSession()
+        if resetHotkeys { VoiceHotkeys.shared.cancelActiveSession() }
         if let error { callback?(error) }
     }
 
