@@ -26,7 +26,7 @@ enum APIProvider: String, CaseIterable, Identifiable, Codable {
         case .deepseek:  return "deepseek-chat"
         case .zai:       return "glm-4.6"
         case .anthropic: return "claude-sonnet-4-6"
-        case .groq:      return "llama-3.3-70b-versatile"
+        case .groq:      return "openai/gpt-oss-120b"
         case .custom:    return "gpt-4o-mini"
         }
     }
@@ -229,6 +229,10 @@ enum SettingsStore {
     private static let demoBaselineKey = "babelbar.demoBaselineRemoved"
     private static let demoBaseline = 124_500
     private static let openHotKeyMigrationKey = "babelbar.openHotKeyOptLMigrated"
+    private static let groqModelMigrationKey = "babelbar.groqLlama33Migrated"
+    /// Groq decommissioned this model on 2026-08-16; every request now fails with
+    /// "model does not exist". Only this exact id is replaced, so a user's own choice stays.
+    private static let deadGroqModel = "llama-3.3-70b-versatile"
     /// The pre-⌥L default (⌥ Space) — only this exact combo is migrated, so a user's
     /// own choice of open-hotkey is never overwritten.
     private static let legacyOpenHotKey = KeyCombo(keyCode: 49, option: true)
@@ -260,6 +264,20 @@ enum SettingsStore {
                 save(s)
             }
             UserDefaults.standard.set(true, forKey: openHotKeyMigrationKey)
+        }
+        // One-time replacement of the decommissioned Groq default model.
+        if !UserDefaults.standard.bool(forKey: groqModelMigrationKey) {
+            var changed = false
+            if s.provider == .groq, s.model == deadGroqModel {
+                s.model = APIProvider.groq.defaultModel
+                changed = true
+            }
+            if s.provider2 == .groq, s.model2 == deadGroqModel {
+                s.model2 = APIProvider.groq.defaultModel
+                changed = true
+            }
+            if changed { save(s) }
+            UserDefaults.standard.set(true, forKey: groqModelMigrationKey)
         }
         return s
     }
