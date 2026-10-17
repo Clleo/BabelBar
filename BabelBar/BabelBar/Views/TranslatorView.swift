@@ -216,21 +216,22 @@ struct TranslatorView: View {
         // content widths (otherwise it drifts toward whichever side has less content).
         ZStack {
             HStack(spacing: 8) {
-                HStack(spacing: 3) {
-                    Text("fn").font(.system(size: 10, weight: .semibold))
+                if state.settings.voiceInputEnabled && !state.settings.dictateHotkey.isEmpty {
+                    Text(state.settings.dictateHotkey.display)
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundColor(Theme.accentPurple)
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 2)
+                        .background(
+                            Capsule(style: .continuous)
+                                .fill(Theme.accentPurple.opacity(0.15))
+                        )
+                        .overlay(
+                            Capsule(style: .continuous)
+                                .stroke(Theme.accentPurple.opacity(0.4), lineWidth: 1)
+                        )
+                        .hoverTip("\(dictationModeDescription)\n\n\(state.t(.tipDictationShortcut))")
                 }
-                .foregroundColor(Theme.accentPurple)
-                .padding(.horizontal, 7)
-                .padding(.vertical, 2)
-                .background(
-                    Capsule(style: .continuous)
-                        .fill(Theme.accentPurple.opacity(0.15))
-                )
-                .overlay(
-                    Capsule(style: .continuous)
-                        .stroke(Theme.accentPurple.opacity(0.4), lineWidth: 1)
-                )
-                .hoverTip(state.t(.tipLiveDictation))   // label moved into a hover tooltip
 
                 Spacer()
 
@@ -256,6 +257,14 @@ struct TranslatorView: View {
             if state.canInsertTranslation {
                 insertButton   // dead-center of the window
             }
+        }
+    }
+
+    private var dictationModeDescription: String {
+        switch state.settings.dictationMode {
+        case .live: state.t(.liveModeDescription)
+        case .liveWhisperKit: state.t(.liveWhisperKitDescription)
+        case .afterPhrase: state.t(.afterPhraseDescription)
         }
     }
 }

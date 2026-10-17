@@ -83,6 +83,7 @@ enum SystemSounds {
 /// speakers doesn't bleed into the microphone, then restores it. macOS has no per-app ducking,
 /// so this lowers the default output device's main volume and puts it back on stop.
 enum SystemAudio {
+    private static let workQueue = DispatchQueue(label: "com.babelbar.system-audio", qos: .utility)
     private static var saved: Float32?
     private static let duckFactor: Float32 = 0.2   // duck to 20% of the current level
 
@@ -123,18 +124,22 @@ enum SystemAudio {
         AudioObjectSetPropertyData(dev, &addr, 0, nil, UInt32(MemoryLayout<Float32>.size), &vol)
     }
 
-    /// Lower the output volume (remembering the current level). No-op if already ducked or
-    /// the device has no settable main volume.
+    /// Lower the output volume away from UI/audio startup paths because CoreAudio calls can block
+    /// synchronously while the output device is waking.
     static func duck() {
-        guard saved == nil, let cur = volume() else { return }
-        saved = cur
-        setVolume(cur * duckFactor)
+        workQueue.async {
+            guard saved == nil, let cur = volume() else { return }
+            saved = cur
+            setVolume(cur * duckFactor)
+        }
     }
 
     /// Restore the volume saved by `duck()`.
     static func restore() {
-        guard let s = saved else { return }
-        setVolume(s)
-        saved = nil
+        workQueue.async {
+            guard let s = saved else { return }
+            setVolume(s)
+            saved = nil
+        }
     }
 }

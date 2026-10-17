@@ -36,6 +36,8 @@ enum LKey: String {
     case languagePreferences, interfaceLanguage, source, target, autoDetect
     // Voice
     case dictateToCursor, translateAtCursor, triggerSound, showRecordingDot, duckAudio
+    case voiceActivationExplanation, dictationMode, modeLive, modeLiveWhisperKit, modeAfterPhrase, dictationShortcut
+    case liveModeDescription, liveWhisperKitDescription, afterPhraseDescription, tipDictationMode, tipDictationShortcut
     case voiceCommands, dictationCleanup, dictationInstructions
     // Permissions
     case permAccessibility, permInput, permScreen, permMic, permSpeech
@@ -56,7 +58,7 @@ enum LKey: String {
     // Speech engine section
     case secSpeech, recognition, engineLocal, engineRemote
     case download, downloading, modelReady, downloaded, initializing, insertion, insertPaste, insertType
-    case remoteNote
+    case remoteNote, legacyModelStorage
     case tipSpeechEngine, tipModelDownload, tipInsertMethod
     // API status
     case apiOffline, apiNoTokens, apiOnline
@@ -74,7 +76,7 @@ enum LKey: String {
     case spokenForm, writtenForm, addRule, removeRule, resetStatistics
     case timesSeenFmt, dismiss, noSuggestions, suggestionsHint
     case tipLiveDictation, tipLiveOnDevice, tipDevDictionary, tipPersonalDict, tipLearn, tipFreq
-    case errSpeechDenied, errSpeechUnavailable, errSpeechOnDevice, errLiveField
+    case errSpeechDenied, errSpeechUnavailable, errSpeechOnDevice, errWhisperModelMissing, errVoiceFocus, errLiveField, errLiveInsert
 }
 
 enum Loc {
@@ -94,7 +96,22 @@ enum Loc {
     }
 
     private static let table: [LKey: [String]] = [
-        .errLiveField: ["Place the cursor in an editable text field and allow Accessibility access.", "Поставьте курсор в редактируемое поле и разрешите Универсальный доступ."],
+        .errLiveField: r(
+            "Live dictation cannot use this field. Place the cursor in an editable field, check Accessibility access, or choose After phrase mode.",
+            "Потоковый ввод недоступен в этом поле. Поставьте курсор в редактируемое поле, проверьте Универсальный доступ или выберите режим «После фразы».",
+            "Live-Diktat kann dieses Feld nicht verwenden. Prüfe den Cursor und die Bedienungshilfen oder wähle „Nach dem Satz“.",
+            "El dictado en vivo no puede usar este campo. Comprueba el cursor y Accesibilidad o elige «Tras la frase».",
+            "La dictée en direct ne peut pas utiliser ce champ. Vérifiez le curseur et l'accessibilité ou choisissez « Après la phrase ».",
+            "La dettatura in tempo reale non può usare questo campo. Controlla il cursore e Accessibilità o scegli «Dopo la frase».",
+            "O ditado em tempo real não pode usar este campo. Verifique o cursor e a Acessibilidade ou escolha «Após a frase»."),
+        .errLiveInsert: r(
+            "Could not continue typing in this field. Try After phrase mode for this app.",
+            "Не удалось продолжить ввод в этом поле. Попробуйте для этого приложения режим «После фразы».",
+            "Die Eingabe in diesem Feld konnte nicht fortgesetzt werden. Versuche „Nach dem Satz“.",
+            "No se pudo seguir escribiendo en este campo. Prueba el modo «Tras la frase».",
+            "Impossible de poursuivre la saisie dans ce champ. Essayez « Après la phrase ».",
+            "Impossibile continuare a scrivere in questo campo. Prova «Dopo la frase».",
+            "Não foi possível continuar a digitar neste campo. Tente «Após a frase»."),
         .settingsTitle: r("BabelBar Settings", "Настройки BabelBar", "BabelBar-Einstellungen",
                           "Ajustes de BabelBar", "Réglages BabelBar", "Impostazioni BabelBar", "Configurações do BabelBar"),
 
@@ -181,6 +198,59 @@ enum Loc {
                              "Diktieren & übersetzen an Cursor", "Dictar y traducir en el cursor",
                              "Dicter et traduire au curseur", "Detta e traduci al cursore",
                              "Ditar e traduzir no cursor"),
+        .voiceActivationExplanation: r(
+            "Allows dictation by shortcut. The microphone starts only when you press it.",
+            "Разрешает диктовку по сочетанию клавиш. Микрофон включается только после нажатия.",
+            "Erlaubt Diktieren per Kürzel. Das Mikrofon startet erst beim Drücken.",
+            "Permite dictar con un atajo. El micrófono se activa al pulsarlo.",
+            "Permet la dictée par raccourci. Le micro démarre à l'appui.",
+            "Consente la dettatura con una scorciatoia. Il microfono si attiva alla pressione.",
+            "Permite ditar por atalho. O microfone inicia ao pressioná-lo."),
+        .dictationMode: r("Text input mode", "Режим ввода текста", "Texteingabemodus", "Modo de entrada", "Mode de saisie", "Modalità di inserimento", "Modo de entrada"),
+        .modeLive: r("Apple Speech live", "Live: Apple Speech", "Apple Speech live", "Apple Speech en vivo", "Apple Speech en direct", "Apple Speech in diretta", "Apple Speech ao vivo"),
+        .modeLiveWhisperKit: r("WhisperKit live", "Live: WhisperKit", "WhisperKit live", "WhisperKit en vivo", "WhisperKit en direct", "WhisperKit in diretta", "WhisperKit ao vivo"),
+        .modeAfterPhrase: r("After phrase", "После фразы", "Nach dem Satz", "Tras la frase", "Après la phrase", "Dopo la frase", "Após a frase"),
+        .dictationShortcut: r("Dictation shortcut", "Клавиша диктовки", "Diktierkürzel", "Atajo de dictado", "Raccourci de dictée", "Scorciatoia dettatura", "Atalho de ditado"),
+        .liveModeDescription: r(
+            "Recognized text appears at the cursor as you speak.",
+            "Распознанный текст появляется под курсором во время речи.",
+            "Erkannter Text erscheint beim Sprechen am Cursor.",
+            "El texto reconocido aparece en el cursor mientras hablas.",
+            "Le texte reconnu apparaît au curseur pendant que vous parlez.",
+            "Il testo riconosciuto appare al cursore mentre parli.",
+            "O texto reconhecido aparece no cursor enquanto você fala."),
+        .liveWhisperKitDescription: r(
+            "WhisperKit recognizes speech locally and inserts complete words at the cursor as you speak. The last word appears after a pause or when you stop.",
+            "WhisperKit распознаёт речь локально и вставляет целые слова под курсор во время диктовки. Последнее слово появляется после паузы или остановки.",
+            "WhisperKit erkennt Sprache lokal und fügt ganze Wörter während des Sprechens am Cursor ein. Das letzte Wort erscheint nach einer Pause oder beim Stoppen.",
+            "WhisperKit reconoce la voz localmente e inserta palabras completas en el cursor mientras hablas. La última palabra aparece tras una pausa o al detenerte.",
+            "WhisperKit reconnaît la parole localement et insère les mots complets au curseur pendant la dictée. Le dernier mot apparaît après une pause ou à l'arrêt.",
+            "WhisperKit riconosce la voce localmente e inserisce parole complete al cursore mentre parli. L'ultima parola appare dopo una pausa o quando ti fermi.",
+            "O WhisperKit reconhece a fala localmente e insere palavras completas no cursor enquanto você fala. A última palavra aparece após uma pausa ou ao parar."),
+        .afterPhraseDescription: r(
+            "The whole phrase is recognized and inserted at the cursor when you stop.",
+            "Вся фраза распознаётся и вставляется под курсор после остановки.",
+            "Der ganze Satz wird nach dem Stoppen erkannt und am Cursor eingefügt.",
+            "La frase completa se reconoce e inserta al detenerte.",
+            "La phrase entière est reconnue et insérée à l'arrêt.",
+            "L'intera frase viene riconosciuta e inserita quando ti fermi.",
+            "A frase completa é reconhecida e inserida quando você para."),
+        .tipDictationMode: r(
+            "Choose when recognized words appear in the focused app.",
+            "Выберите, когда распознанные слова появятся в активном приложении.",
+            "Wähle, wann erkannte Wörter in der aktiven App erscheinen.",
+            "Elige cuándo aparecen las palabras en la app activa.",
+            "Choisissez quand les mots apparaissent dans l'app active.",
+            "Scegli quando le parole appaiono nell'app attiva.",
+            "Escolha quando as palavras aparecem no app ativo."),
+        .tipDictationShortcut: r(
+            "Tap to start, then tap again to stop. Or hold the shortcut while speaking and release it to stop.",
+            "Нажмите для начала и ещё раз для остановки. Или удерживайте сочетание во время речи и отпустите для остановки.",
+            "Zum Starten drücken, zum Stoppen erneut drücken. Oder beim Sprechen halten und loslassen.",
+            "Pulsa para iniciar y otra vez para detener. O mantenlo mientras hablas y suéltalo al terminar.",
+            "Appuyez pour démarrer puis arrêter, ou maintenez le raccourci pendant la parole.",
+            "Premi per iniziare e di nuovo per fermare, oppure tieni premuto mentre parli.",
+            "Pressione para iniciar e novamente para parar, ou mantenha pressionado enquanto fala."),
         .triggerSound: r("Trigger sound", "Звук запуска", "Auslöseton", "Sonido de activación",
                         "Son de déclenchement", "Suono di attivazione", "Som de ativação"),
         .showRecordingDot: r("Show recording indicator", "Показывать индикатор записи",
@@ -324,6 +394,7 @@ enum Loc {
         .downloading: r("Downloading…", "Загрузка…", "Wird geladen…", "Descargando…", "Téléchargement…", "Download…", "Baixando…"),
         .modelReady: r("Ready", "Готово", "Bereit", "Listo", "Prêt", "Pronto", "Pronto"),
         .downloaded: r("Downloaded", "Скачана", "Geladen", "Descargado", "Téléchargé", "Scaricato", "Baixado"),
+        .legacyModelStorage: r("Old WhisperKit cache", "Старый кэш WhisperKit", "Alter WhisperKit-Cache", "Caché antiguo de WhisperKit", "Ancien cache WhisperKit", "Vecchia cache WhisperKit", "Cache antigo do WhisperKit"),
         .initializing: r("Initializing…", "Идёт инициализация…", "Initialisierung…", "Inicializando…",
                         "Initialisation…", "Inizializzazione…", "Inicializando…"),
         .insertion: r("Insertion", "Вставка", "Einfügen", "Inserción", "Insertion", "Inserimento", "Inserção"),
@@ -651,5 +722,19 @@ enum Loc {
                               "Pas de modèle local pour cette langue.",
                               "Nessun modello locale per questa lingua.",
                               "Sem modelo local para este idioma."),
+        .errWhisperModelMissing: r("Download the selected WhisperKit model in Settings before using live dictation.",
+                                   "Сначала скачайте выбранную модель WhisperKit в настройках.",
+                                   "Lade zuerst das ausgewählte WhisperKit-Modell in den Einstellungen herunter.",
+                                   "Descarga primero el modelo WhisperKit seleccionado en Ajustes.",
+                                   "Téléchargez d'abord le modèle WhisperKit sélectionné dans les réglages.",
+                                   "Scarica prima il modello WhisperKit selezionato nelle impostazioni.",
+                                   "Baixe primeiro o modelo WhisperKit selecionado em Configurações."),
+        .errVoiceFocus: r("Place the cursor in another app before pressing the dictation shortcut.",
+                          "Перед диктовкой поставьте курсор в другом приложении.",
+                          "Setze den Cursor vor dem Diktieren in eine andere App.",
+                          "Coloca el cursor en otra aplicación antes de dictar.",
+                          "Placez le curseur dans une autre app avant de dicter.",
+                          "Posiziona il cursore in un'altra app prima di dettare.",
+                          "Coloque o cursor em outro aplicativo antes de ditar."),
     ]
 }

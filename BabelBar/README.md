@@ -11,16 +11,23 @@ Native macOS menu-bar translator (RU ⇄ EN) built with SwiftUI + AppKit.
 2. Select the `BabelBar` scheme → Run (⌘R).
 3. The app launches as a menu-bar agent (no Dock icon). Click the menu-bar icon to open the popover.
 
+For a local test build that immediately replaces and restarts `/Applications/BabelBar.app`,
+run `./dev-run.command` from this directory (or double-click it in Finder). It builds
+and verifies an Apple Development signed Release before stopping the running app.
+If the build fails, the installed app keeps running. No DMG or version bump is needed.
+
 ## First-time permissions
 The app needs these macOS permissions (System Settings → Privacy & Security):
 - **Accessibility** — to send synthetic ⌘C for "translate selection".
 - **Screen Recording** — for the screenshot OCR hotkey.
 
-## Hotkey (3.0.1)
-- **Fn** — start live dictation; press again to stop. Hold-to-talk also works.
-- All other shortcut assignments are cleared, including saved assignments from older versions.
-- Manual typing, a click or a focus change ends the session. Press Fn to resume at the current cursor.
-- In System Settings → Keyboard, set Fn to “Do Nothing”.
+## Shortcuts
+- In **Settings → Voice Input**, turn voice input on or off, then choose one dictation mode: **While speaking** streams text to the cursor, while **After phrase** inserts the recognized phrase after recording stops. Both modes use the same configurable shortcut. The microphone starts only when that shortcut is pressed.
+- Click the shortcut badge to record modifiers. Hold the full combination and release it to save; use the × button or Delete to clear it. Dictation with translation has a separate optional shortcut in the same section.
+- In **Settings → App**, set keyboard shortcuts for opening BabelBar, translating a selection, and translating a screenshot.
+- **Fn** is the default dictation shortcut and can be changed or cleared. Press the assigned shortcut again to stop; hold-to-talk also works.
+- Manual typing, a click or a focus change ends a live dictation session. Use its assigned shortcut to resume at the current cursor.
+- If Fn is assigned, set it to “Do Nothing” in System Settings → Keyboard.
 - Live dictation needs Microphone, Speech Recognition and Accessibility permissions. The target editor must expose its text and selection through Accessibility.
 
 ## Translation API

@@ -1,19 +1,24 @@
 import AVFoundation
+import CoreAudio
 
 /// Captures the microphone into a 16 kHz mono Float buffer — the format Whisper wants.
 /// Unlike streaming recognition, we record the whole utterance and transcribe it on stop,
 /// so the end of the phrase is never cut off. Drives `MicLevel` for the recording waveform.
 final class AudioRecorder {
-    /// Built fresh for every recording — see the comment in `start()`.
+    // Hardware graph operations run in order on this queue. Neither creating an
+    // aggregate device nor waiting for the microphone can block the main run loop.
+    private let captureQueue = DispatchQueue(label: "com.babelbar.audio-capture", qos: .userInitiated)
     private var engine: AVAudioEngine?
-    private var converter: AVAudioConverter?
+    private var configurationObserver: NSObjectProtocol?
+    private var route: AudioRoute?
+    private var graphInvalid = false
+    private var capture: Capture?
     private let targetFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32,
                                              sampleRate: 16_000, channels: 1, interleaved: false)!
-    private var samples: [Float] = []
-    private let lock = NSLock()
+    // Facade state and consumer configuration are accessed on the main thread.
+    // Each audio tap receives its own immutable configuration in `Capture`.
+    private var operation = 0
     private(set) var isRecording = false
-
-    private var startedAt: Date?
     /// Seconds of audio the last clip contains, divided by the seconds the recording actually ran.
     /// A healthy capture sits at ~1.0.
     private(set) var lastCaptureRatio: Double = 1
@@ -22,82 +27,217 @@ final class AudioRecorder {
     /// Live consumer of the input buffers (streaming recognition, v3.0). Called
     /// on the audio thread — must stay cheap.
     var onBuffer: ((AVAudioPCMBuffer) -> Void)?
+    /// Converted Whisper-ready samples for streaming consumers. Called on the audio thread;
+    /// consumers must copy/enqueue quickly and do model work asynchronously.
+    var onSamples: (([Float]) -> Void)?
     /// When a live consumer handles audio itself, don't accumulate samples: a
     /// streaming session can run for many minutes and the batch path isn't used.
     var accumulateSamples = true
 
-    /// Begin capturing. Throws if the audio engine can't start.
-    func start() throws {
-        // A second start (e.g. cursor dictation while the in-app mic is already recording)
-        // must not install a second tap on the same bus — that raises an NSException.
-        if isRecording { stop() }
-        lock.lock(); samples.removeAll(); lock.unlock()
-        MicLevel.shared.reset()
-
-        // A NEW engine per recording. `inputNode` binds to a private aggregate device
-        // (`CADefaultDeviceAggregate-<pid>`) the first time it is materialized and holds on to
-        // that binding, so an engine kept for the life of the app outlives every route change —
-        // headphones, an output switch, a Continuity mic appearing. Rebuilding the graph costs
-        // milliseconds and always binds to the devices that are current *now*.
-        let engine = AVAudioEngine()
-        let input = engine.inputNode
-        let inFormat = input.outputFormat(forBus: 0)
-        converter = AVAudioConverter(from: inFormat, to: targetFormat)
-
-        input.installTap(onBus: 0, bufferSize: 4096, format: inFormat) { [weak self] buffer, _ in
-            self?.append(buffer)
+    /// Prepare the graph without starting microphone capture. Permission prompts
+    /// belong to the user action; background preparation never requests access.
+    func prepare() {
+        guard AVCaptureDevice.authorizationStatus(for: .audio) == .authorized else { return }
+        captureQueue.async { [weak self] in
+            guard let self, self.capture == nil else { return }
+            do { _ = try self.preparedEngine() }
+            catch { NSLog("BabelBar audio: preparation failed: %@", error.localizedDescription) }
         }
-        engine.prepare()
-        try engine.start()
-        self.engine = engine
-        startedAt = Date()
+    }
+
+    func releasePrepared() {
+        captureQueue.async { [weak self] in
+            guard let self, self.capture == nil else { return }
+            self.discardGraph()
+        }
+    }
+
+    /// Begin capturing asynchronously. Starting counts as busy immediately, so
+    /// another shortcut cannot open a second recording while hardware is waking.
+    func start(completion: @escaping (Result<Void, Error>) -> Void) {
+        operation &+= 1
+        let request = operation
         isRecording = true
-    }
-
-    private func append(_ buffer: AVAudioPCMBuffer) {
-        MicLevel.shared.push(Self.micLevel(of: buffer))   // live waveform
-        onBuffer?(buffer)                                 // streaming recognition, if attached
-        guard accumulateSamples, let converter else { return }
-
-        let ratio = targetFormat.sampleRate / buffer.format.sampleRate
-        let capacity = AVAudioFrameCount(Double(buffer.frameLength) * ratio) + 64
-        guard let out = AVAudioPCMBuffer(pcmFormat: targetFormat, frameCapacity: capacity) else { return }
-
-        var fed = false
-        var err: NSError?
-        converter.convert(to: out, error: &err) { _, status in
-            if fed { status.pointee = .noDataNow; return nil }
-            fed = true; status.pointee = .haveData; return buffer
-        }
-        guard err == nil, out.frameLength > 0, let ch = out.floatChannelData else { return }
-        let n = Int(out.frameLength)
-        lock.lock()
-        samples.append(contentsOf: UnsafeBufferPointer(start: ch[0], count: n))
-        lock.unlock()
-    }
-
-    /// Stop capturing and return the recorded 16 kHz mono samples.
-    @discardableResult
-    func stop() -> [Float] {
-        if let engine {
-            if engine.isRunning { engine.stop() }
-            engine.inputNode.removeTap(onBus: 0)
-        }
-        engine = nil          // the next recording builds its own, bound to the current devices
-        converter = nil
-        isRecording = false
+        let onBuffer = self.onBuffer, onSamples = self.onSamples
+        let accumulate = accumulateSamples
         MicLevel.shared.reset()
-        lock.lock(); let s = samples; samples.removeAll(); lock.unlock()
+        captureQueue.async {
+            let result = Result {
+                _ = self.stopCapture()
+                let start = ProcessInfo.processInfo.systemUptime
+                let engine = try self.preparedEngine()
+                let input = engine.inputNode
+                let format = input.outputFormat(forBus: 0)
+                let capture = Capture(format: format, targetFormat: self.targetFormat,
+                                      accumulate: accumulate, onBuffer: onBuffer, onSamples: onSamples)
+                input.installTap(onBus: 0, bufferSize: 1024, format: format) { buffer, _ in
+                    capture.append(buffer)
+                }
+                engine.prepare()
+                do { try engine.start() }
+                catch {
+                    engine.stop()
+                    input.removeTap(onBus: 0)
+                    self.discardGraph()
+                    throw error
+                }
+                capture.startedAt = ProcessInfo.processInfo.systemUptime
+                self.capture = capture
+                NSLog("BabelBar audio: microphone started in %.0f ms", (capture.startedAt - start) * 1000)
+            }
+            DispatchQueue.main.async {
+                guard self.operation == request else {
+                    completion(.failure(CancellationError()))
+                    return
+                }
+                if case .failure = result { self.isRecording = false }
+                completion(result)
+            }
+        }
+    }
 
-        lastWallDuration = startedAt.map { Date().timeIntervalSince($0) } ?? 0
-        lastCaptureRatio = lastWallDuration > 0
-            ? Double(s.count) / targetFormat.sampleRate / lastWallDuration
-            : 1
-        startedAt = nil
-        return s
+    /// Stop in the same queue as start, then deliver the completed clip on main.
+    /// A stop issued during startup invalidates its eventual success callback.
+    func stop(completion: @escaping ([Float]) -> Void = { _ in }) {
+        operation &+= 1
+        let request = operation
+        isRecording = false
+        captureQueue.async {
+            let finished = self.stopCapture()
+            DispatchQueue.main.async {
+                if self.operation == request {
+                    if let finished {
+                        self.lastWallDuration = finished.duration
+                        self.lastCaptureRatio = finished.ratio
+                    }
+                    MicLevel.shared.reset()
+                }
+                completion(finished?.samples ?? [])
+            }
+        }
     }
 
     func cancel() { stop() }
+
+    private func preparedEngine() throws -> AVAudioEngine {
+        let currentRoute = AudioRoute.current()
+        if let engine, !graphInvalid, route == currentRoute { return engine }
+        discardGraph()
+        let began = ProcessInfo.processInfo.systemUptime
+        let engine = AVAudioEngine()
+        let format = engine.inputNode.outputFormat(forBus: 0)
+        guard format.sampleRate > 0, format.channelCount > 0 else {
+            throw NSError(domain: "BabelBar.Audio", code: 1,
+                          userInfo: [NSLocalizedDescriptionKey: "Microphone has no input format"])
+        }
+        engine.prepare()
+        self.engine = engine
+        route = currentRoute
+        graphInvalid = false
+        configurationObserver = NotificationCenter.default.addObserver(
+            forName: .AVAudioEngineConfigurationChange, object: engine, queue: nil
+        ) { [weak self, weak engine] _ in
+            guard let self else { return }
+            self.captureQueue.async {
+                guard self.engine === engine else { return }
+                self.graphInvalid = true
+                if self.capture == nil { self.discardGraph() }
+            }
+        }
+        NSLog("BabelBar audio: graph prepared in %.0f ms", (ProcessInfo.processInfo.systemUptime - began) * 1000)
+        return engine
+    }
+
+    private func stopCapture() -> (samples: [Float], duration: TimeInterval, ratio: Double)? {
+        guard let capture else { return nil }
+        if let engine {
+            engine.stop()
+            engine.inputNode.removeTap(onBus: 0)
+        }
+        self.capture = nil
+        let samples = capture.takeSamples()
+        let duration = max(0, ProcessInfo.processInfo.systemUptime - capture.startedAt)
+        let ratio = duration > 0 ? Double(samples.count) / targetFormat.sampleRate / duration : 1
+        // A reused graph is valid only for the same input/output devices and format.
+        // Rebuild after a route/configuration change, including a Continuity mic.
+        if graphInvalid || route != AudioRoute.current() { discardGraph() }
+        return (samples, duration, ratio)
+    }
+
+    private func discardGraph() {
+        if let configurationObserver { NotificationCenter.default.removeObserver(configurationObserver) }
+        configurationObserver = nil
+        engine = nil
+        route = nil
+        graphInvalid = false
+    }
+
+    private struct AudioRoute: Equatable {
+        let input: AudioDeviceID
+        let output: AudioDeviceID
+        static func current() -> AudioRoute {
+            func device(_ selector: AudioObjectPropertySelector) -> AudioDeviceID {
+                var address = AudioObjectPropertyAddress(mSelector: selector,
+                    mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
+                var value: AudioDeviceID = 0
+                var size = UInt32(MemoryLayout<AudioDeviceID>.size)
+                AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size, &value)
+                return value
+            }
+            return AudioRoute(input: device(kAudioHardwarePropertyDefaultInputDevice),
+                              output: device(kAudioHardwarePropertyDefaultOutputDevice))
+        }
+    }
+
+    /// The tap owns this capture's converter and callbacks. Nothing reaches back
+    /// into mutable UI configuration, even if another session is already queued.
+    private final class Capture {
+        let targetFormat: AVAudioFormat
+        let converter: AVAudioConverter?
+        let accumulate: Bool
+        let onBuffer: ((AVAudioPCMBuffer) -> Void)?
+        let onSamples: (([Float]) -> Void)?
+        var startedAt: TimeInterval = 0
+        private var samples: [Float] = []
+        private let lock = NSLock()
+
+        init(format: AVAudioFormat, targetFormat: AVAudioFormat, accumulate: Bool,
+             onBuffer: ((AVAudioPCMBuffer) -> Void)?, onSamples: (([Float]) -> Void)?) {
+            self.targetFormat = targetFormat
+            self.accumulate = accumulate
+            self.onBuffer = onBuffer
+            self.onSamples = onSamples
+            // Apple Speech accepts native buffers: skip resampling/allocation entirely.
+            converter = accumulate || onSamples != nil ? AVAudioConverter(from: format, to: targetFormat) : nil
+        }
+
+        func append(_ buffer: AVAudioPCMBuffer) {
+            MicLevel.shared.push(AudioRecorder.micLevel(of: buffer))
+            onBuffer?(buffer)
+            guard let converter else { return }
+            let ratio = targetFormat.sampleRate / buffer.format.sampleRate
+            let capacity = AVAudioFrameCount(Double(buffer.frameLength) * ratio) + 64
+            guard let out = AVAudioPCMBuffer(pcmFormat: targetFormat, frameCapacity: capacity) else { return }
+            var fed = false
+            var error: NSError?
+            converter.convert(to: out, error: &error) { _, status in
+                if fed { status.pointee = .noDataNow; return nil }
+                fed = true; status.pointee = .haveData; return buffer
+            }
+            guard error == nil, out.frameLength > 0, let channel = out.floatChannelData else { return }
+            let chunk = Array(UnsafeBufferPointer(start: channel[0], count: Int(out.frameLength)))
+            if accumulate {
+                lock.lock(); samples.append(contentsOf: chunk); lock.unlock()
+            }
+            onSamples?(chunk)
+        }
+
+        func takeSamples() -> [Float] {
+            lock.lock(); defer { lock.unlock() }
+            let result = samples; samples = []
+            return result
+        }
+    }
 
     /// True when the clip's own length disagrees with how long the recording actually ran, which
     /// means the input device is not delivering audio on a real timeline. Seen in the wild on a

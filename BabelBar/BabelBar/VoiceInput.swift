@@ -3,10 +3,8 @@ import SwiftUI
 import Carbon.HIToolbox
 
 // =============================================================================
-//  Global voice shortcuts (FreeFlow-style):
-//   • a modifier-only combo (default Fn) → dictate speech and type it at the cursor
-//   • another combo (default Shift+Fn)   → dictate, translate in background, type at the cursor
-//  Both support hold-to-talk (hold → speak → release) AND tap-to-toggle (tap → speak → tap).
+//  Configurable global modifier-only voice shortcuts. They support hold-to-talk
+//  (hold → speak → release) and tap-to-toggle (tap → speak → tap).
 //  Implemented with a CGEventTap so the Fn key can be detected (keyCode 63) reliably.
 //  Requires Accessibility permission.
 // =============================================================================
@@ -20,6 +18,7 @@ struct ModifierCombo: Codable, Equatable {
     var command = false
 
     var isEmpty: Bool { !(fn || shift || control || option || command) }
+    var modifierCount: Int { [fn, shift, control, option, command].filter { $0 }.count }
 
     /// True when every modifier of `other` is also held here (`Shift+Fn` contains `Fn`).
     func contains(_ other: ModifierCombo) -> Bool {
@@ -38,10 +37,12 @@ struct ModifierCombo: Codable, Equatable {
     }
 }
 
-enum VoiceAction {
-    case dictateToCursor          // Fn:       speak → type raw transcript at the cursor
-    case dictateTranslateToCursor // Shift+Fn: speak → translate in background → type at the cursor
-    case liveDictateToCursor      // ⌘Fn:      speak → text streams into the field while you talk (v3.0)
+enum VoiceAction: Equatable {
+    case dictateToCursor
+    case dictateTranslateToCursor
+    case liveDictateToCursor
+
+    var usesBatchCapture: Bool { self != .liveDictateToCursor }
 }
 
 /// Types a string at the current cursor position in the frontmost app (no clipboard).
@@ -99,19 +100,20 @@ final class VoiceHotkeys {
     private var source: CFRunLoopSource?
     private var tapRunLoop: CFRunLoop?
     private var tapThread: Thread?
-    private let runLoopReady = DispatchSemaphore(value: 0)
+    private let tapLifecycleLock = NSLock()
     private var fnDown = false
 
     // Thread-safe snapshot of the bindings so the tap thread never reads AppState directly.
     private let bindingsLock = NSLock()
     private var cachedBindings: [(ModifierCombo, VoiceAction)] = []
+    private var shortcutRecording = false
 
     // Session state machine.
     private enum Phase { case idle, holdPending, toggling, toggleStopPending }
     private var phase: Phase = .idle
     private var activeAction: VoiceAction?
     private var activeCombo = ModifierCombo()
-    private var pressStart = Date()
+    private var pressStart: TimeInterval = 0
     private var prevHeld = false
     private let tapThreshold: TimeInterval = 0.4   // < this on release = treat as a tap (toggle)
 
@@ -124,6 +126,7 @@ final class VoiceHotkeys {
     // seen as a bare "Fn" first. When a matched combo is also the prefix of a longer
     // binding we let the flags settle before committing to an action.
     private var latestCombo = ModifierCombo()
+    private var latestEventTime: TimeInterval = 0
     private var startPending = false
     private let comboSettleDelay: TimeInterval = 0.15
 
@@ -135,7 +138,21 @@ final class VoiceHotkeys {
 
     private func snapshotBindings() -> [(ModifierCombo, VoiceAction)] {
         bindingsLock.lock(); defer { bindingsLock.unlock() }
-        return cachedBindings
+        return shortcutRecording ? [] : cachedBindings
+    }
+
+    /// Let the active settings window receive Fn while its shortcut recorder is open.
+    func setShortcutRecording(_ recording: Bool) {
+        bindingsLock.lock(); shortcutRecording = recording; bindingsLock.unlock()
+        if recording {
+            if activeAction != nil { finish() }
+            cancelActiveSession()
+        }
+    }
+
+    private func isShortcutRecording() -> Bool {
+        bindingsLock.lock(); defer { bindingsLock.unlock() }
+        return shortcutRecording
     }
 
     func start() {
@@ -143,7 +160,7 @@ final class VoiceHotkeys {
         refreshBindings()
 
         let thread = Thread { [weak self] in
-            guard let self else { return }
+            guard let self, !Thread.current.isCancelled else { return }
             let mask = (CGEventMask(1) << CGEventType.flagsChanged.rawValue)
             let callback: CGEventTapCallBack = { _, type, event, userInfo in
                 guard let userInfo else { return Unmanaged.passUnretained(event) }
@@ -155,18 +172,24 @@ final class VoiceHotkeys {
                                               callback: callback,
                                               userInfo: Unmanaged.passUnretained(self).toOpaque()) else {
                 NSLog("BabelBar: voice event tap unavailable (Accessibility permission?)")
-                self.runLoopReady.signal()
                 return
             }
             let src = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
             let rl = CFRunLoopGetCurrent()
+            self.tapLifecycleLock.lock()
+            guard !Thread.current.isCancelled else {
+                self.tapLifecycleLock.unlock()
+                CFMachPortInvalidate(tap)
+                return
+            }
             CFRunLoopAddSource(rl, src, .commonModes)
             CGEvent.tapEnable(tap: tap, enable: true)
             self.tap = tap
             self.source = src
             self.tapRunLoop = rl
             self.fnDown = NSEvent.modifierFlags.contains(.function)
-            self.runLoopReady.signal()
+            self.tapLifecycleLock.unlock()
+            NSLog("BabelBar startup: voice shortcut listener ready")
             // Service the tap on this private run loop until stop() tears it down.
             while !Thread.current.isCancelled {
                 CFRunLoopRunInMode(.defaultMode, 0.5, false)
@@ -174,20 +197,21 @@ final class VoiceHotkeys {
         }
         thread.name = "com.babelbar.voicehotkeys"
         thread.qualityOfService = .userInteractive
-        tapThread = thread
+        tapLifecycleLock.lock(); tapThread = thread; tapLifecycleLock.unlock()
         thread.start()
-        // Wait briefly so tap/source/runloop are set before stop() could touch them.
-        _ = runLoopReady.wait(timeout: .now() + 2.0)
     }
 
     func stop() {
+        tapLifecycleLock.lock()
         tapThread?.cancel()
-        if let rl = tapRunLoop {
+        let rl = tapRunLoop, source = self.source, tap = self.tap
+        self.tap = nil; self.source = nil; tapRunLoop = nil; tapThread = nil
+        tapLifecycleLock.unlock()
+        if let rl {
             if let source { CFRunLoopRemoveSource(rl, source, .commonModes) }
             CFRunLoopStop(rl)
         }
         if let tap { CFMachPortInvalidate(tap) }
-        tap = nil; source = nil; tapRunLoop = nil; tapThread = nil
     }
 
     private func anyBindingUsesFn() -> Bool { snapshotBindings().contains { $0.0.fn } }
@@ -195,6 +219,8 @@ final class VoiceHotkeys {
     private func handle(type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
             // macOS disabled the tap (timeout/user input) — re-enable so global hotkeys keep working.
+            NSLog("BabelBar: voice event tap was disabled (%u); reenabling", type.rawValue)
+            tapLifecycleLock.lock(); let tap = self.tap; tapLifecycleLock.unlock()
             if let tap { CGEvent.tapEnable(tap: tap, enable: true) }
             // No flagsChanged was delivered while the tap was off, so the release that ends an
             // active session may have been dropped. The state machine would then stay in
@@ -204,7 +230,8 @@ final class VoiceHotkeys {
             let flags = NSEvent.modifierFlags
             fnDown = flags.contains(.function)
             let settled = combo(from: flags)
-            DispatchQueue.main.async { self.process(current: settled) }
+            let eventTime = ProcessInfo.processInfo.systemUptime
+            DispatchQueue.main.async { self.process(current: settled, at: eventTime) }
             return Unmanaged.passUnretained(event)
         }
         guard type == .flagsChanged, let ns = NSEvent(cgEvent: event) else {
@@ -214,8 +241,11 @@ final class VoiceHotkeys {
         // Track the real Fn state from the Fn key itself (keyCode 63).
         if ns.keyCode == 63 { fnDown = ns.modifierFlags.contains(.function) }
 
+        if isShortcutRecording() { return Unmanaged.passUnretained(event) }
+
         let current = combo(from: ns.modifierFlags)
-        DispatchQueue.main.async { self.process(current: current) }
+        let eventTime = ns.timestamp
+        DispatchQueue.main.async { self.process(current: current, at: eventTime) }
 
         // Swallow the standalone Fn press so macOS doesn't trigger its own Fn action.
         if ns.keyCode == 63 && anyBindingUsesFn() { return nil }
@@ -236,11 +266,14 @@ final class VoiceHotkeys {
     }
 
     /// True when a longer binding could still be completed from `c` (e.g. `Fn` → `Shift+Fn`).
-    private func isPrefixOfLongerBinding(_ c: ModifierCombo) -> Bool {
-        snapshotBindings().contains { $0.0 != c && $0.0.contains(c) }
+    private func needsComboSettling(_ combo: ModifierCombo, action: VoiceAction) -> Bool {
+        let longer = snapshotBindings().filter { $0.0 != combo && $0.0.contains(combo) }
+        // Both batch actions start the same capture. Begin immediately and select
+        // the stop action if Shift joins Fn, without opening a second microphone.
+        return !longer.isEmpty && (!action.usesBatchCapture || longer.contains { !$0.1.usesBatchCapture })
     }
 
-    private func begin(_ combo: ModifierCombo, _ action: VoiceAction, pressedAt: Date) {
+    private func begin(_ combo: ModifierCombo, _ action: VoiceAction, pressedAt: TimeInterval) {
         phase = .holdPending
         activeAction = action
         activeCombo = combo
@@ -258,22 +291,24 @@ final class VoiceHotkeys {
         onStart?(action)
     }
 
-    private func process(current: ModifierCombo) {
+    func process(current: ModifierCombo, at eventTime: TimeInterval) {
         latestCombo = current
+        latestEventTime = eventTime
 
         switch phase {
         case .idle:
             guard !startPending, let (combo, action) = match(current) else { return }
-            guard isPrefixOfLongerBinding(combo) else {
-                begin(combo, action, pressedAt: Date())
+            guard needsComboSettling(combo, action: action) else {
+                begin(combo, action, pressedAt: eventTime)
                 return
             }
             // Wait for the remaining modifiers before committing, so "Shift+Fn" isn't
             // started as a plain "Fn" dictation session.
             startPending = true
-            let pressedAt = Date()
+            let pressedAt = eventTime
+            let pendingSession = sessionID
             DispatchQueue.main.asyncAfter(deadline: .now() + comboSettleDelay) { [weak self] in
-                guard let self else { return }
+                guard let self, self.sessionID == pendingSession, self.startPending else { return }
                 self.startPending = false
                 guard self.phase == .idle else { return }
                 let settled = self.latestCombo
@@ -284,12 +319,20 @@ final class VoiceHotkeys {
                     // immediately replay the current (released) flags so the tap/hold
                     // state machine still sees the release.
                     self.begin(combo, action, pressedAt: pressedAt)
-                    self.process(current: settled)
+                    self.process(current: settled, at: self.latestEventTime)
                 }
             }
 
         case .holdPending, .toggling, .toggleStopPending:
-            let held = (current == activeCombo)
+            if phase == .holdPending, activeAction?.usesBatchCapture == true,
+               eventTime - pressStart <= comboSettleDelay,
+               let (combo, action) = match(current), action.usesBatchCapture,
+               combo != activeCombo, combo.contains(activeCombo) {
+                activeCombo = combo
+                activeAction = action
+            }
+            // Extra modifiers must not look like a release of the dictation key.
+            let held = current.contains(activeCombo)
             if held && !prevHeld {
                 // combo pressed again (second tap) while in a toggle session
                 if phase == .toggling { phase = .toggleStopPending }
@@ -297,7 +340,7 @@ final class VoiceHotkeys {
                 // combo released
                 switch phase {
                 case .holdPending:
-                    if Date().timeIntervalSince(pressStart) < tapThreshold {
+                    if eventTime - pressStart < tapThreshold {
                         phase = .toggling                 // quick tap → keep listening
                     } else {
                         finish()                          // hold release → stop + insert
@@ -319,6 +362,12 @@ final class VoiceHotkeys {
         prevHeld = false; startPending = false
     }
 
+    /// Stop microphone capture when dictation is disabled or its mode changes.
+    func stopActiveSession() {
+        if activeAction != nil { finish() }
+        cancelActiveSession()
+    }
+
     private func finish() {
         if let action = activeAction { onStop?(action) }
         phase = .idle
@@ -333,17 +382,20 @@ final class VoiceHotkeys {
 struct ModifierComboRecorder: View {
     @Binding var combo: ModifierCombo
     var recordingPrompt: String = "Press modifiers…"
+    var clearLabel: String = "Clear"
     var onChange: () -> Void
 
     @State private var recording = false
     @State private var monitor: Any?
+    @State private var pending = ModifierCombo()
     @State private var hover = false
     @Environment(\.themeRevision) private var revision   // re-render on theme switch
 
     var body: some View {
         let _ = revision
-        return Button { recording ? stop() : start() } label: {
-            Text(recording ? recordingPrompt : combo.display)
+        return HStack(spacing: 6) {
+            Button { recording ? stop() : start() } label: {
+            Text(recording ? (pending.isEmpty ? recordingPrompt : pending.display) : combo.display)
                 .font(.system(size: 12, weight: .medium))
                 .foregroundColor(recording ? Theme.accentPurple : Theme.textPrimary)
                 .padding(.horizontal, 12)
@@ -356,23 +408,46 @@ struct ModifierComboRecorder: View {
                     Capsule(style: .continuous)
                         .stroke(recording ? Theme.accentPurple.opacity(0.6) : Theme.controlBorder, lineWidth: 1)
                 )
+            }
+            .buttonStyle(.plain)
+            .onHover { hover = $0 }
+            if !combo.isEmpty {
+                Button { clear() } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundColor(Theme.textSecondary)
+                }
+                .buttonStyle(.plain)
+                .help(clearLabel)
+                .accessibilityLabel(clearLabel)
+            }
         }
-        .buttonStyle(.plain)
-        .onHover { hover = $0 }
         .onDisappear(perform: stop)
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in stop() }
     }
 
     private func start() {
+        pending = ModifierCombo()
         recording = true
-        monitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { event in
+        VoiceHotkeys.shared.setShortcutRecording(true)
+        monitor = NSEvent.addLocalMonitorForEvents(matching: [.flagsChanged, .keyDown, .leftMouseDown]) { event in
+            if event.type == .leftMouseDown { stop(); return event }
+            if event.type == .keyDown {
+                if event.keyCode == 53 { stop(); return nil } // Escape cancels.
+                if event.keyCode == 51 || event.keyCode == 117 { clear(); return nil }
+                return event
+            }
             let f = event.modifierFlags
             let c = ModifierCombo(fn: f.contains(.function),
                                   shift: f.contains(.shift),
                                   control: f.contains(.control),
                                   option: f.contains(.option),
                                   command: f.contains(.command))
-            if !c.isEmpty {
-                combo = c
+            // Keep the largest held combo; flagsChanged arrives once per modifier.
+            // Save on release, when Shift+Fn cannot be mistaken for bare Shift.
+            if c.modifierCount >= pending.modifierCount && !c.isEmpty {
+                pending = c
+            } else if c.isEmpty && !pending.isEmpty {
+                combo = pending
                 stop()
                 onChange()
             }
@@ -381,7 +456,15 @@ struct ModifierComboRecorder: View {
     }
 
     private func stop() {
+        guard recording else { return }
         recording = false
         if let m = monitor { NSEvent.removeMonitor(m); monitor = nil }
+        VoiceHotkeys.shared.setShortcutRecording(false)
+    }
+
+    private func clear() {
+        stop()
+        combo = ModifierCombo()
+        onChange()
     }
 }

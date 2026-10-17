@@ -466,14 +466,29 @@ struct SettingsView: View {
     }
     private var modelBinding: Binding<WhisperModel> {
         Binding(get: { state.settings.whisperModel },
-                set: { state.settings.whisperModel = $0; state.saveSettings() })
+                set: { model in
+                    if state.settings.whisperModel != model {
+                        VoiceHotkeys.shared.stopActiveSession()
+                        models.select(model)
+                    }
+                    state.settings.whisperModel = model
+                    state.saveSettings()
+                })
     }
     private var insertBinding: Binding<InsertMethod> {
         Binding(get: { state.settings.insertMethod },
                 set: { state.settings.insertMethod = $0; state.saveSettings() })
     }
+    private var dictationModeBinding: Binding<DictationMode> {
+        Binding(get: { state.settings.dictationMode },
+                set: { mode in
+                    VoiceHotkeys.shared.stopActiveSession()
+                    state.settings.dictationMode = mode
+                    state.saveSettings()
+                })
+    }
 
-    /// Master ON/OFF for the whole voice feature. Off → hotkeys stop, content collapses.
+    /// Master ON/OFF for voice shortcuts. The microphone still starts on key press.
     private var voiceHeader: some View {
         HStack(spacing: 7) {
             Image(systemName: "mic.fill")
@@ -487,15 +502,20 @@ struct SettingsView: View {
                 .font(.system(size: 11)).foregroundColor(Theme.textSecondary)
             CapsuleToggle(isOn: Binding(
                 get: { state.settings.voiceInputEnabled },
-                set: { state.settings.voiceInputEnabled = $0; state.saveSettings()
-                       VoiceHotkeys.shared.refreshBindings() }   // stop/resume global listening
+                set: { enabled in
+                    if !enabled { VoiceHotkeys.shared.stopActiveSession() }
+                    state.settings.voiceInputEnabled = enabled
+                    state.saveSettings()
+                }
             ))
         }
     }
 
     private var speechSubsection: some View {
         VStack(alignment: .leading, spacing: 16) {
-            sectionTitle(state.t(.secSpeech), "waveform", rowSpacing: 16)
+            sectionTitle(state.settings.dictationMode == .afterPhrase
+                         ? state.t(.secSpeech) : state.t(.translateAtCursor),
+                         "waveform", rowSpacing: 16)
 
             row(state.t(.recognition), help: state.t(.tipSpeechEngine)) {
                 CapsuleSegmented(selection: engineBinding, options: [.local, .remote],
@@ -504,11 +524,13 @@ struct SettingsView: View {
             }
 
             if state.settings.speechEngine == .local {
-                row(state.t(.model), help: state.t(.tipModelDownload)) {
-                    CapsulePicker(selection: modelBinding, options: WhisperModel.allCases,
-                                  title: { "\($0.label) · \($0.approxMB) MB" }, width: 200)
+                if state.settings.dictationMode != .liveWhisperKit {
+                    row(state.t(.model), help: state.t(.tipModelDownload)) {
+                        CapsulePicker(selection: modelBinding, options: WhisperModel.allCases,
+                                      title: { "\($0.label) · \($0.approxMB) MB" }, width: 200)
+                    }
+                    modelDownloadRow
                 }
-                modelDownloadRow
             } else {
                 row(state.t(.provider)) {
                     CapsulePicker(selection: Binding(
@@ -546,24 +568,48 @@ struct SettingsView: View {
 
     @ViewBuilder private var modelDownloadRow: some View {
         let m = state.settings.whisperModel
-        HStack(spacing: 6) {
-            if models.downloading == m {
-                ProgressView(value: models.progress).frame(width: 140)
-                Text("\(Int(models.progress * 100))%")
-                    .font(.system(size: 11)).foregroundColor(Theme.textSecondary)
-                HoverTextButton(title: state.t(.cancel)) { models.cancelDownload() }
-            } else if models.preparing && models.isDownloaded(m) {
-                ProgressView().controlSize(.small)
-                Text(state.t(.initializing)).font(labelFont).foregroundColor(Theme.textSecondary)
-            } else if models.isDownloaded(m) {
-                Image(systemName: "checkmark.circle.fill").foregroundColor(Theme.accentGreen)
-                Text("\(state.t(.downloaded)) · \(models.diskSize(m) ?? "\(m.approxMB) MB")")
-                    .font(labelFont).foregroundColor(Theme.textSecondary)
-                HoverIconButton(systemName: "trash", size: 12) { models.delete(m) }
-            } else {
+        if !models.isDownloaded(m), models.downloading == nil {
+            HStack(spacing: 6) {
                 HoverTextButton(title: "\(state.t(.download)) · \(m.approxMB) MB") { models.download(m) }
+                Spacer()
             }
-            Spacer()
+        }
+    }
+
+    /// Keep model storage management visible even when recognition is set to Online.
+    @ViewBuilder private var downloadedModelSection: some View {
+        let installed = models.storedModels
+        if !installed.isEmpty || models.downloading != nil || models.storageError != nil {
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(installed) { stored in
+                    HStack(spacing: 7) {
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundColor(Theme.accentGreen)
+                        let title = stored.kind == .app ? state.t(.downloaded) : state.t(.legacyModelStorage)
+                        Text("\(title): \(stored.model.label) · \(models.diskSize(stored) ?? "\(stored.model.approxMB) MB")")
+                            .font(labelFont).foregroundColor(Theme.textSecondary)
+                        Spacer()
+                        HoverIconButton(systemName: "trash", size: 12) {
+                            VoiceHotkeys.shared.stopActiveSession()
+                            models.delete(stored)
+                        }
+                    }
+                }
+                if let downloading = models.downloading {
+                    HStack(spacing: 7) {
+                        ProgressView(value: models.progress).frame(width: 140)
+                        Text("\(state.t(.downloading)) \(downloading.label) · \(Int(models.progress * 100))%")
+                            .font(labelFont).foregroundColor(Theme.textSecondary)
+                        Spacer()
+                        HoverTextButton(title: state.t(.cancel)) { models.cancelDownload() }
+                    }
+                }
+                if let storageError = models.storageError {
+                    Text(storageError)
+                        .font(.system(size: 11)).foregroundColor(.red)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
         }
     }
 
@@ -573,19 +619,86 @@ struct SettingsView: View {
         let enabled = state.settings.voiceInputEnabled
         return VStack(alignment: .leading, spacing: 16) {
             voiceHeader
-                .padding(.bottom, enabled ? Self.titleToContentGap - 16 : 0)
+            Text(state.t(.voiceActivationExplanation))
+                .font(.system(size: 11))
+                .foregroundColor(Theme.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
 
-            if enabled {
+            VStack(alignment: .leading, spacing: 16) {
+                row(state.t(.dictationMode), help: state.t(.tipDictationMode)) {
+                    CapsuleSegmented(selection: dictationModeBinding,
+                                     options: DictationMode.allCases,
+                                     title: {
+                                         switch $0 {
+                                         case .live: state.t(.modeLive)
+                                         case .liveWhisperKit: state.t(.modeLiveWhisperKit)
+                                         case .afterPhrase: state.t(.modeAfterPhrase)
+                                         }
+                                     })
+                        .frame(width: 320)
+                }
+                row(state.t(.dictationShortcut), help: state.t(.tipDictationShortcut)) {
+                    ModifierComboRecorder(combo: dictationShortcutBinding,
+                                          recordingPrompt: state.t(.recordModifiers),
+                                          clearLabel: state.t(.clear)) { state.saveSettings() }
+                }
+                Text(dictationModeDescription)
+                    .font(.system(size: 11))
+                    .foregroundColor(Theme.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                if state.settings.dictationMode == .live {
+                    liveModeSettings
+                } else if state.settings.dictationMode == .liveWhisperKit {
+                    whisperKitLiveSettings
+                } else {
+                    speechSubsection
+                }
                 voiceRows
-                speechSubsection
-                liveDictationSubsection
+                if state.settings.dictationMode != .afterPhrase && !state.settings.translateDictateHotkey.isEmpty {
+                    speechSubsection
+                }
             }
+            .disabled(!enabled)
+            .opacity(enabled ? 1 : 0.55)
+            downloadedModelSection
         }
         .padding(20)
         .glassPanel(corner: 16)
     }
 
+    private var dictationModeDescription: String {
+        switch state.settings.dictationMode {
+        case .live: state.t(.liveModeDescription)
+        case .liveWhisperKit: state.t(.liveWhisperKitDescription)
+        case .afterPhrase: state.t(.afterPhraseDescription)
+        }
+    }
+
+    private var whisperKitLiveSettings: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            row(state.t(.model), help: state.t(.tipModelDownload)) {
+                CapsulePicker(selection: modelBinding, options: WhisperModel.allCases,
+                              title: { "\($0.label) · \($0.approxMB) MB" }, width: 200)
+            }
+            modelDownloadRow
+            row(state.t(.liveLanguageLabel)) {
+                CapsuleSegmented(selection: Binding(
+                    get: { state.settings.liveDictationLanguage },
+                    set: { state.settings.liveDictationLanguage = $0; state.saveSettings() }
+                ), options: [.auto, .ru, .en]) {
+                    $0 == .auto ? state.t(.autoDetect) : $0 == .ru ? "Русский" : "English"
+                }
+                .frame(width: 200)
+            }
+        }
+    }
+
     @ViewBuilder private var voiceRows: some View {
+            row(state.t(.translateAtCursor), help: state.t(.tipTranslateAtCursor)) {
+                ModifierComboRecorder(combo: translateShortcutBinding,
+                                      recordingPrompt: state.t(.recordModifiers), clearLabel: state.t(.clear)) { state.saveSettings() }
+            }
             row(state.t(.showRecordingDot), help: state.t(.tipShowRecordingDot)) {
                 CapsuleToggle(isOn: Binding(
                     get: { state.settings.showRecordingDot },
@@ -654,35 +767,20 @@ struct SettingsView: View {
             }
     }
 
-    // MARK: - LIVE DICTATION (v3.0)
+    // MARK: - SETTINGS SPECIFIC TO STREAMING RECOGNITION
 
-    /// Real-time streaming dictation — its own hotkey, independent of the
-    /// Whisper-based Fn / Shift+Fn modes above.
-    private var liveDictationSubsection: some View {
+    private var liveModeSettings: some View {
         VStack(alignment: .leading, spacing: 16) {
-            sectionTitle(state.t(.liveDictation), "keyboard", rowSpacing: 16)
-
-            row(state.t(.liveDictation), help: state.t(.tipLiveDictation)) {
-                HStack(spacing: 10) {
-                    Text("fn").font(.system(size: 12, weight: .semibold, design: .monospaced))
-                    CapsuleToggle(isOn: Binding(
-                        get: { state.settings.liveDictationEnabled },
-                        set: { state.settings.liveDictationEnabled = $0; state.saveSettings()
-                               VoiceHotkeys.shared.refreshBindings() }
-                    ))
+            row(state.t(.liveLanguageLabel)) {
+                CapsuleSegmented(selection: Binding(
+                    get: { state.settings.liveDictationLanguage },
+                    set: { state.settings.liveDictationLanguage = $0; state.saveSettings() }
+                ), options: [.auto, .ru, .en]) {
+                    $0 == .auto ? state.t(.autoDetect) : $0 == .ru ? "Русский" : "English"
                 }
+                .frame(width: 200)
             }
-
-            if state.settings.liveDictationEnabled {
-                row(state.t(.liveLanguageLabel)) {
-                    CapsuleSegmented(selection: Binding(
-                        get: { state.settings.liveDictationLanguage },
-                        set: { state.settings.liveDictationLanguage = $0; state.saveSettings() }
-                    ), options: [.auto, .ru, .en]) {
-                        $0 == .auto ? state.t(.autoDetect) : $0 == .ru ? "Русский" : "English"
-                    }
-                    .frame(width: 200)
-                }
+            if state.settings.dictationMode == .live {
                 row(state.t(.liveOnDevice), help: state.t(.tipLiveOnDevice)) {
                     CapsuleToggle(isOn: Binding(
                         get: { state.settings.liveOnDeviceOnly },
@@ -925,6 +1023,19 @@ struct SettingsView: View {
                     get: { state.settings.showMenuBarIcon },
                     set: { state.settings.showMenuBarIcon = $0; state.saveSettings(); state.onMenuBarVisibilityChanged?($0) }
                 ))
+            }
+
+            row(state.t(.openBabelBar), help: state.t(.tipOpen)) {
+                HotKeyRecorder(combo: $state.settings.openHotKey,
+                               recordingPrompt: state.t(.recordKeys), clearLabel: state.t(.clear), onChange: applyHotKeys)
+            }
+            row(state.t(.translateAuto), help: state.t(.tipTranslateAuto)) {
+                HotKeyRecorder(combo: $state.settings.selectionHotKey, doubleTap: true,
+                               recordingPrompt: state.t(.recordKeys), clearLabel: state.t(.clear), onChange: applyHotKeys)
+            }
+            row(state.t(.translateScreenshot), help: state.t(.tipScreenshot)) {
+                HotKeyRecorder(combo: $state.settings.screenshotHotKey,
+                               recordingPrompt: state.t(.recordKeys), clearLabel: state.t(.clear), onChange: applyHotKeys)
             }
 
             row(state.t(.interfaceLanguage)) {
@@ -1191,6 +1302,16 @@ struct SettingsView: View {
     private func applyHotKeys() {
         state.saveSettings()
         HotKeyManager.shared.reload()
+    }
+
+    private var dictationShortcutBinding: Binding<ModifierCombo> {
+        Binding(get: { state.settings.dictateHotkey },
+                set: { state.settings.setVoiceShortcut($0, for: .dictateToCursor) })
+    }
+
+    private var translateShortcutBinding: Binding<ModifierCombo> {
+        Binding(get: { state.settings.translateDictateHotkey },
+                set: { state.settings.setVoiceShortcut($0, for: .dictateTranslateToCursor) })
     }
 
     /// Persisted Source/Target preference bindings (save immediately on change).

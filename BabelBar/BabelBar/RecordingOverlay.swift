@@ -11,6 +11,7 @@ final class MicLevel: ObservableObject {
     private init() { startNetworkMonitor() }
 
     @Published var level: CGFloat = 0
+    @Published var isVisible = false
     /// True while we're waiting on a result (transcription/translation) — the overlay then
     /// shows a loader in place of the record dot.
     @Published var processing = false
@@ -23,6 +24,11 @@ final class MicLevel: ObservableObject {
     @Published var errorText: String?
 
     private let networkMonitor = NWPathMonitor()
+    private let meterLock = NSLock()
+    private var meterGeneration = 0
+    private var publicationPending = false
+    private var latestLevel: CGFloat = 0
+    private var lastPublication: TimeInterval = 0
 
     private func startNetworkMonitor() {
         networkMonitor.pathUpdateHandler = { [weak self] path in
@@ -32,14 +38,38 @@ final class MicLevel: ObservableObject {
     }
 
     func push(_ raw: Float) {
-        let v = CGFloat(min(1, max(0, raw)))
+        meterLock.lock()
+        latestLevel = CGFloat(min(1, max(0, raw)))
+        let now = ProcessInfo.processInfo.systemUptime
+        guard !publicationPending, now - lastPublication >= 1.0 / 30.0 else { meterLock.unlock(); return }
+        publicationPending = true
+        let generation = meterGeneration
+        meterLock.unlock()
         DispatchQueue.main.async {
+            self.meterLock.lock()
+            guard self.meterGeneration == generation else { self.meterLock.unlock(); return }
+            let v = self.latestLevel
+            self.publicationPending = false
+            self.lastPublication = ProcessInfo.processInfo.systemUptime
+            self.meterLock.unlock()
             if v > self.level { self.level = self.level * 0.4 + v * 0.6 }   // fast attack
             else              { self.level = self.level * 0.82 + v * 0.18 } // slow release
         }
     }
 
-    func reset() { DispatchQueue.main.async { self.level = 0 } }
+    func reset() {
+        meterLock.lock()
+        meterGeneration &+= 1
+        let generation = meterGeneration
+        publicationPending = false; lastPublication = 0; latestLevel = 0
+        meterLock.unlock()
+        DispatchQueue.main.async {
+            self.meterLock.lock()
+            let current = self.meterGeneration == generation
+            self.meterLock.unlock()
+            if current { self.level = 0 }
+        }
+    }
 }
 
 /// Recording pill near the notch/menu-bar brow during voice dictation (even when the app is
@@ -51,6 +81,7 @@ final class RecordingOverlay {
     private init() {}
 
     private var panel: NSPanel?
+    private var presentation = 0
     private let fallbackWidth: CGFloat = 184  // non-notch displays
     private let dropHeight: CGFloat = 22      // visible part below the brow
     private let bottomGap: CGFloat = 4        // gap between the waveform and the pill's bottom
@@ -60,6 +91,11 @@ final class RecordingOverlay {
 
     private var errorHideDelay: DispatchWorkItem?        // pending auto-hide of an error pill
     private let errorShowDuration: TimeInterval = 3.0
+
+    /// Create the hosting view before the first shortcut, without displaying it.
+    func prepare() {
+        if panel == nil { panel = makePanel() }
+    }
 
     /// Switch the left indicator between the record dot and a loader. Turning it ON is delayed
     /// by `processingShowDelay` so quick results never flash a spinner; turning it OFF is immediate
@@ -92,10 +128,12 @@ final class RecordingOverlay {
     }
 
     func show() {
+        presentation &+= 1
         processingDelay?.cancel(); processingDelay = nil
         errorHideDelay?.cancel(); errorHideDelay = nil
         MicLevel.shared.errorText = nil
         MicLevel.shared.processing = false        // fresh recording → red dot, not loader
+        MicLevel.shared.isVisible = true
         let screen = currentScreen()
         let panel = self.panel ?? makePanel()
         self.panel = panel
@@ -113,11 +151,14 @@ final class RecordingOverlay {
     }
 
     func hide() {
+        presentation &+= 1
+        let revision = presentation
         processingDelay?.cancel(); processingDelay = nil
         errorHideDelay?.cancel(); errorHideDelay = nil
         MicLevel.shared.reset()
         MicLevel.shared.processing = false
         MicLevel.shared.errorText = nil
+        MicLevel.shared.isVisible = false
         guard let panel else { return }
         let screen = panel.screen ?? currentScreen()
         var hidden = panel.frame
@@ -126,7 +167,10 @@ final class RecordingOverlay {
             ctx.duration = 0.16
             ctx.timingFunction = CAMediaTimingFunction(name: .easeIn)
             panel.animator().setFrame(hidden, display: true)
-        }, completionHandler: { panel.orderOut(nil) })
+        }, completionHandler: { [weak self] in
+            guard self?.presentation == revision else { return }
+            panel.orderOut(nil)
+        })
     }
 
     /// Bottom edge of the menu bar / notch "brow".
@@ -202,7 +246,8 @@ private struct WaveformOverlayView: View {
     var body: some View {
         // ~24fps: smooth for this tiny strip while keeping the main thread free (a heavy
         // per-frame redraw here used to stall the run loop and let global Fn leak out).
-        TimelineView(.periodic(from: .now, by: 1.0 / 24.0)) { timeline in
+        if mic.isVisible {
+          TimelineView(.periodic(from: .now, by: 1.0 / 24.0)) { timeline in
             let t = timeline.date.timeIntervalSinceReferenceDate
             if let err = mic.errorText {
                 errorLabel(err)
@@ -221,6 +266,7 @@ private struct WaveformOverlayView: View {
                     .padding(.leading, 6)
                 }
             }
+          }
         }
     }
 

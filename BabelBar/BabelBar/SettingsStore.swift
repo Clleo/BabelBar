@@ -110,6 +110,14 @@ enum LiveDictationLanguage: String, CaseIterable, Identifiable, Codable {
     }
 }
 
+/// The single plain-dictation shortcut starts one of these two input flows.
+enum DictationMode: String, CaseIterable, Identifiable, Codable {
+    case live
+    case liveWhisperKit
+    case afterPhrase
+    var id: String { rawValue }
+}
+
 struct AppSettings: Codable {
     var appearance: Appearance = .dark
     var interfaceLang: UILanguage = .en
@@ -147,8 +155,10 @@ struct AppSettings: Codable {
     var selectionHotKey = KeyCombo.unassigned
     var screenshotHotKey = KeyCombo.unassigned
 
-    // Voice shortcuts (modifier-only, e.g. Fn / Shift+Fn).
-    var dictateHotkey = ModifierCombo()                         // Whisper dictation — unbound since 3.0 (live took Fn)
+    // One shortcut starts the selected dictation mode. Translation remains a
+    // separate optional voice command with its own shortcut.
+    var dictateHotkey = ModifierCombo(fn: true)
+    var dictationMode: DictationMode = .live
     var translateDictateHotkey = ModifierCombo()
     var voiceInputEnabled = true    // master switch for the whole voice-input feature
     var voiceSoundEnabled = true
@@ -171,10 +181,7 @@ struct AppSettings: Codable {
     var whisperModel: WhisperModel = .base
     var insertMethod: InsertMethod = .paste
 
-    // Live (streaming) dictation — v3.0. Own hotkey; since the 3.0 default swap
-    // it lives on Fn, the Whisper dictation above starts unbound.
-    var liveDictationEnabled = true
-    var liveDictateHotkey = ModifierCombo(fn: true)   // Fn
+    // Settings used only by the live recognition mode.
     var liveDictationLanguage: LiveDictationLanguage = .ru
     /// Refuse to start live dictation when the locale has no on-device model
     /// (otherwise recognition would go through Apple's servers).
@@ -197,18 +204,32 @@ struct AppSettings: Codable {
         case provider2, baseURL2, model2, activeSlot, launchAtLogin
         case showMenuBarIcon, autoCheckUpdates, lastUpdateCheck
         case openHotKey, selectionHotKey, screenshotHotKey
-        case dictateHotkey, translateDictateHotkey, voiceInputEnabled, voiceSoundEnabled, voiceSoundName, voiceSoundVolume, showRecordingDot, duckAudio
+        case dictateHotkey, dictationMode, translateDictateHotkey, voiceInputEnabled, voiceSoundEnabled, voiceSoundName, voiceSoundVolume, showRecordingDot, duckAudio
         case voiceCommandsEnabled, dictationCleanupEnabled, dictationInstructions
         case speechEngine, whisperModel, insertMethod
-        case liveDictationEnabled, liveDictateHotkey, liveDictationLanguage, liveOnDeviceOnly
+        case liveDictationLanguage, liveOnDeviceOnly
         case developerDictionaryEnabled, frequencyLearningEnabled, learnFromCorrections
         case transcriptionProvider, transcriptionBaseURL, transcriptionModel
     }
 
-    mutating func useFnOnly() {
-        openHotKey = .unassigned; selectionHotKey = .unassigned; screenshotHotKey = .unassigned
-        dictateHotkey = ModifierCombo(); translateDictateHotkey = ModifierCombo()
-        liveDictateHotkey = ModifierCombo(fn: true)
+    private enum LegacyVoiceKeys: String, CodingKey {
+        case liveDictateHotkey, liveDictationEnabled
+    }
+
+    mutating func setVoiceShortcut(_ combo: ModifierCombo, for action: VoiceAction) {
+        // A modifier combo must start exactly one voice command.
+        if !combo.isEmpty {
+            switch action {
+            case .dictateToCursor, .liveDictateToCursor:
+                if translateDictateHotkey == combo { translateDictateHotkey = ModifierCombo() }
+            case .dictateTranslateToCursor:
+                if dictateHotkey == combo { dictateHotkey = ModifierCombo() }
+            }
+        }
+        switch action {
+        case .dictateToCursor, .liveDictateToCursor: dictateHotkey = combo
+        case .dictateTranslateToCursor: translateDictateHotkey = combo
+        }
     }
 
     init() {}
@@ -237,7 +258,29 @@ struct AppSettings: Codable {
         openHotKey = (try? c.decode(KeyCombo.self, forKey: .openHotKey)) ?? AppSettings().openHotKey
         selectionHotKey = (try? c.decode(KeyCombo.self, forKey: .selectionHotKey)) ?? AppSettings().selectionHotKey
         screenshotHotKey = (try? c.decode(KeyCombo.self, forKey: .screenshotHotKey)) ?? AppSettings().screenshotHotKey
-        dictateHotkey = (try? c.decode(ModifierCombo.self, forKey: .dictateHotkey)) ?? AppSettings().dictateHotkey
+        let savedDictationHotkey = try? c.decode(ModifierCombo.self, forKey: .dictateHotkey)
+        if let savedMode = try? c.decode(DictationMode.self, forKey: .dictationMode) {
+            dictationMode = savedMode
+            dictateHotkey = savedDictationHotkey ?? AppSettings().dictateHotkey
+        } else {
+            // Existing profiles had separate shortcuts for live and finished-phrase
+            // dictation. Select the mode that was usable and carry its shortcut over.
+            let legacy = try decoder.container(keyedBy: LegacyVoiceKeys.self)
+            let liveShortcut = (try? legacy.decode(ModifierCombo.self, forKey: .liveDictateHotkey)) ?? ModifierCombo()
+            let liveEnabled = (try? legacy.decode(Bool.self, forKey: .liveDictationEnabled)) ?? true
+            let batchShortcut = savedDictationHotkey ?? ModifierCombo()
+            if liveEnabled && !liveShortcut.isEmpty {
+                dictationMode = .live
+                dictateHotkey = liveShortcut
+            } else if !batchShortcut.isEmpty {
+                dictationMode = .afterPhrase
+                dictateHotkey = batchShortcut
+            } else {
+                dictationMode = liveEnabled ? .live : .afterPhrase
+                dictateHotkey = c.contains(.dictateHotkey) || legacy.contains(.liveDictateHotkey)
+                    ? ModifierCombo() : AppSettings().dictateHotkey
+            }
+        }
         translateDictateHotkey = (try? c.decode(ModifierCombo.self, forKey: .translateDictateHotkey)) ?? AppSettings().translateDictateHotkey
         voiceSoundEnabled = (try? c.decode(Bool.self, forKey: .voiceSoundEnabled)) ?? true
         voiceSoundName = (try? c.decode(String.self, forKey: .voiceSoundName)) ?? "Pop"
@@ -251,8 +294,6 @@ struct AppSettings: Codable {
         speechEngine = (try? c.decode(SpeechEngine.self, forKey: .speechEngine)) ?? .local
         whisperModel = (try? c.decode(WhisperModel.self, forKey: .whisperModel)) ?? .base
         insertMethod = (try? c.decode(InsertMethod.self, forKey: .insertMethod)) ?? .paste
-        liveDictationEnabled = (try? c.decode(Bool.self, forKey: .liveDictationEnabled)) ?? true
-        liveDictateHotkey = (try? c.decode(ModifierCombo.self, forKey: .liveDictateHotkey)) ?? AppSettings().liveDictateHotkey
         liveDictationLanguage = (try? c.decode(LiveDictationLanguage.self, forKey: .liveDictationLanguage)) ?? .ru
         liveOnDeviceOnly = (try? c.decode(Bool.self, forKey: .liveOnDeviceOnly)) ?? false
         developerDictionaryEnabled = (try? c.decode(Bool.self, forKey: .developerDictionaryEnabled)) ?? true
@@ -273,7 +314,6 @@ enum SettingsStore {
     private static let demoBaseline = 124_500
     private static let openHotKeyMigrationKey = "babelbar.openHotKeyOptLMigrated"
     private static let groqModelMigrationKey = "babelbar.groqLlama33Migrated"
-    private static let liveFnMigrationKey = "babelbar.liveFnMigrated"
     /// Groq decommissioned this model on 2026-08-16; every request now fails with
     /// "model does not exist". Only this exact id is replaced, so a user's own choice stays.
     private static let deadGroqModel = "llama-3.3-70b-versatile"
@@ -323,29 +363,10 @@ enum SettingsStore {
             if changed { save(s) }
             UserDefaults.standard.set(true, forKey: groqModelMigrationKey)
         }
-        // One-time 3.0 default swap: live dictation takes Fn, the old Whisper
-        // dictation starts unbound. Only the exact old defaults are moved, so
-        // any user customization of either combo survives untouched.
-        if !UserDefaults.standard.bool(forKey: liveFnMigrationKey) {
-            if hadSaved,
-               s.dictateHotkey == ModifierCombo(fn: true),
-               s.liveDictateHotkey == ModifierCombo(fn: true, command: true) {
-                s.dictateHotkey = AppSettings().dictateHotkey
-                s.liveDictateHotkey = AppSettings().liveDictateHotkey
-                save(s)
-            }
-            UserDefaults.standard.set(true, forKey: liveFnMigrationKey)
-        }
-        // Fn is the sole shortcut in 3.0.1, including customized legacy profiles.
-        s.useFnOnly()
-        // Shortcut migration must not rewrite secrets when Keychain is locked.
-        if let data = try? JSONEncoder().encode(s) { UserDefaults.standard.set(data, forKey: key) }
         return s
     }
 
     static func save(_ settings: AppSettings) {
-        var settings = settings
-        settings.useFnOnly()
         // Secrets → Keychain; everything else → UserDefaults JSON (keys excluded via CodingKeys).
         Keychain.set(settings.apiKey, for: Keychain.apiKey)
         Keychain.set(settings.apiKey2, for: Keychain.apiKey2)

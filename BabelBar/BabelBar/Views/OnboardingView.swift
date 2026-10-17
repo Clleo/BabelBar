@@ -272,7 +272,15 @@ struct OnboardingView: View {
                 .frame(maxWidth: 400)
 
             VStack(spacing: 10) {
-                hotkeyRow(state.t(.liveDictation), "fn")
+                if !state.settings.dictateHotkey.isEmpty {
+                    hotkeyRow(state.settings.dictationMode == .live ? state.t(.modeLive)
+                             : state.settings.dictationMode == .liveWhisperKit ? state.t(.modeLiveWhisperKit)
+                             : state.t(.dictateToCursor),
+                              state.settings.dictateHotkey.display)
+                }
+                if !state.settings.translateDictateHotkey.isEmpty {
+                    hotkeyRow(state.t(.translateAtCursor), state.settings.translateDictateHotkey.display)
+                }
             }
             .padding(20)
             .glassPanel(corner: 16)

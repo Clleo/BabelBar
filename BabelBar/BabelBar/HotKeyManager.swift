@@ -15,6 +15,7 @@ final class HotKeyManager {
     private var shotHotKey: EventHotKeyRef?
     private var globalMonitor: Any?
     private var lastTapDate: Date?
+    private var shortcutRecording = false
 
     private let openID: UInt32 = 1
     private let shotID: UInt32 = 2
@@ -33,8 +34,14 @@ final class HotKeyManager {
     func reload() {
         unregisterCarbon()
         if let m = globalMonitor { NSEvent.removeMonitor(m); globalMonitor = nil }
+        guard !shortcutRecording else { return }
         registerFromSettings()
         registerDoubleTapMonitor()
+    }
+
+    func setShortcutRecording(_ recording: Bool) {
+        shortcutRecording = recording
+        reload()
     }
 
     // MARK: - Carbon hotkeys (single-press: Open, Screenshot)

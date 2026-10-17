@@ -204,7 +204,14 @@ final class AppState: ObservableObject {
             await self?.cleanUpDictation(text, settings: settings) ?? text
         }
         Task { @MainActor [weak self] in
+            // Menu-bar UI and event taps get the first run-loop turn. Model
+            // housekeeping and CoreML loading can start once shortcuts are ready.
+            try? await Task.sleep(nanoseconds: 600_000_000)
             WhisperModelManager.shared.onModelReady = { [weak self] in self?.preloadLocalModel() }
+            WhisperModelManager.shared.onModelWillDelete = { [weak self] variant in
+                await self?.dictationEngine.unloadLocal(variant: variant)
+            }
+            if let self { WhisperModelManager.shared.select(self.settings.whisperModel) }
             self?.preloadLocalModel()
             self?.checkForUpdatesOnLaunch()
         }
@@ -227,11 +234,28 @@ final class AppState: ObservableObject {
     private static let autoCheckInterval: TimeInterval = 6 * 3600
 
     /// Warm the local Whisper model ahead of time (only if local engine + model already on disk).
-    func preloadLocalModel() {
-        guard settings.speechEngine == .local else { return }
+    func preloadLocalModel(forBatch: Bool = false) {
+        let usesBatch = forBatch || settings.dictationMode == .afterPhrase || !settings.translateDictateHotkey.isEmpty
+        guard settings.voiceInputEnabled,
+              settings.dictationMode == .liveWhisperKit || (usesBatch && settings.speechEngine == .local) else { return }
         let variant = settings.whisperModel.variant
         guard WhisperModelManager.isVariantOnDisk(variant) else { return }
         dictationEngine.preloadLocal(variant: variant)
+    }
+
+    /// Build the microphone graph ahead of the shortcut without starting capture.
+    func prepareVoiceInput() {
+        let useBatch = settings.voiceInputEnabled && settings.dictationMode == .afterPhrase
+        let useLive = settings.voiceInputEnabled && settings.dictationMode != .afterPhrase
+        if useBatch {
+            dictationEngine.prepareCapture()
+        } else {
+            dictationEngine.releasePreparedCapture()
+        }
+        Task { @MainActor in
+            if useLive { LiveDictationController.shared.prepareMicrophone() }
+            else { LiveDictationController.shared.releasePreparedMicrophone() }
+        }
     }
 
     // MARK: - Localization
@@ -403,16 +427,24 @@ final class AppState: ObservableObject {
     /// In-app mic button (translator field): record → transcribe → fill field (+ translate).
     func toggleDictation() {
         if isDictating { stopDictation(); return }
+        guard !dictationEngine.isBusy, !LiveDictationController.isRunningNow else { return }
         dictationEngine.requestMic { [weak self] granted in
             guard let self else { return }
             guard granted else { self.errorMessage = self.t(.errMicSpeech); return }
             self.errorMessage = nil
             self.inputText = ""
-            do {
-                try self.dictationEngine.start(duckAudio: self.settings.duckAudio)
-                self.isDictating = true
-                self.playTriggerSound()
-            } catch { self.errorMessage = error.localizedDescription }
+            self.preloadLocalModel(forBatch: true)
+            self.isDictating = true
+            self.dictationEngine.start(duckAudio: self.settings.duckAudio) { [weak self] result in
+                guard let self else { return }
+                switch result {
+                case .success: self.playTriggerSound()
+                case .failure(let error):
+                    if error is CancellationError { return }
+                    self.isDictating = false
+                    self.errorMessage = error.localizedDescription
+                }
+            }
         }
     }
 
@@ -448,12 +480,20 @@ final class AppState: ObservableObject {
                 RecordingOverlay.shared.showError(self.t(.errMicSpeech))
                 return
             }
-            do {
-                try self.dictationEngine.start(duckAudio: self.settings.duckAudio)
-                self.playTriggerSound()
-                MicLevel.shared.showDot = self.settings.showRecordingDot
-                RecordingOverlay.shared.show()
-            } catch { self.errorMessage = error.localizedDescription }
+            self.dictationEngine.start(duckAudio: self.settings.duckAudio) { [weak self] result in
+                guard let self else { return }
+                switch result {
+                case .success:
+                    self.playTriggerSound()
+                    MicLevel.shared.showDot = self.settings.showRecordingDot
+                    RecordingOverlay.shared.show()
+                case .failure(let error):
+                    guard !(error is CancellationError) else { return }
+                    self.errorMessage = error.localizedDescription
+                    RecordingOverlay.shared.showError(self.t(.errDictation))
+                    VoiceHotkeys.shared.cancelActiveSession()
+                }
+            }
         }
     }
 
@@ -467,7 +507,7 @@ final class AppState: ObservableObject {
             switch result {
             case .success(let text) where !text.isEmpty:
                 RecordingOverlay.shared.hide()
-                TextInserter.insert(text, method: self.settings.insertMethod)
+                TextInserter.insertDictation(text, method: self.settings.insertMethod)
             case .failure(let e):
                 // The app window is hidden during cursor dictation — surface the failure
                 // in the pill itself, or the user just sees the overlay silently vanish.
@@ -488,7 +528,7 @@ final class AppState: ObservableObject {
         }
     }
 
-    // MARK: - Global voice→translate→insert (Shift+Fn)
+    // MARK: - Global voice→translate→insert (user-assigned shortcut)
 
     func startCursorTranslateDictation() { beginCursorCapture() }
 
@@ -520,10 +560,10 @@ final class AppState: ObservableObject {
         }
     }
 
-    // MARK: - Live (streaming) dictation — ⌘Fn (v3.0)
+    // MARK: - Live (streaming) dictation — selected primary mode
 
-    /// Text streams into the focused app's field while the user speaks; dictionaries
-    /// correct terminology on the fly. The controller owns the whole session
+    /// The selected live recognizer processes microphone audio as the user speaks.
+    /// The controller owns the whole session
     /// (AppState is deliberately not MainActor — hence the hops).
     func startLiveDictation() {
         guard !dictationEngine.isBusy else {
@@ -531,8 +571,11 @@ final class AppState: ObservableObject {
             return
         }
         let settings = self.settings
+        let localTranscriber = settings.dictationMode == .liveWhisperKit
+            ? dictationEngine.localTranscriberForLive(variant: settings.whisperModel.variant) : nil
         Task { @MainActor in
-            LiveDictationController.shared.start(settings: settings) { [weak self] key in
+            LiveDictationController.shared.start(settings: settings,
+                                                 localTranscriber: localTranscriber) { [weak self] key in
                 guard let self else { return }
                 // The app window may be hidden — surface failures in the pill (same
                 // contract as the Whisper cursor flows).
@@ -563,14 +606,14 @@ final class AppState: ObservableObject {
                 await MainActor.run {
                     RecordingOverlay.shared.hide()
                     self.applyTranslationResult(result)
-                    TextInserter.insert(result.text, method: self.settings.insertMethod)
+                    TextInserter.insertDictation(result.text, method: self.settings.insertMethod)
                 }
             } catch {
                 await MainActor.run {
                     // Translation failed (offline / provider down) — don't throw the user's
                     // words away: insert the raw transcript and say what happened.
                     self.errorMessage = error.localizedDescription
-                    TextInserter.insert(text, method: self.settings.insertMethod)
+                    TextInserter.insertDictation(text, method: self.settings.insertMethod)
                     RecordingOverlay.shared.showError(self.t(.errTranslationOriginal))
                 }
             }
@@ -646,6 +689,7 @@ final class AppState: ObservableObject {
         VoiceHotkeys.shared.refreshBindings()
         // Warm the local model if the user just switched to local / changed the model.
         preloadLocalModel()
+        prepareVoiceInput()
     }
 
     /// Reset every setting (and the theme) back to factory defaults, then persist and re-apply.

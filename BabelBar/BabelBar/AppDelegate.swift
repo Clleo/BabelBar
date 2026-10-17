@@ -140,6 +140,7 @@ final class BlurContainerViewController: NSViewController {
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
 
+    private let launchStartedAt = ProcessInfo.processInfo.systemUptime
     private var statusItem: NSStatusItem!
     private var panel: KeyableBorderlessWindow?
     private var settingsWindow: NSWindow?
@@ -169,10 +170,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         HotKeyManager.shared.configure(appState: appState)
         HotKeyManager.shared.start()
 
-        // Global voice shortcuts: dictate at the cursor (Fn) and dictate→translate→insert (Shift+Fn).
+        // The main shortcut follows the selected dictation mode; translation is optional.
         VoiceHotkeys.shared.bindings = { [weak appState] in
             guard let s = appState, s.settings.voiceInputEnabled else { return [] }   // master off → no hotkeys
-            return s.settings.liveDictationEnabled ? [(ModifierCombo(fn: true), .liveDictateToCursor)] : []
+            var result: [(ModifierCombo, VoiceAction)] = []
+            if !s.settings.dictateHotkey.isEmpty {
+                let action: VoiceAction = s.settings.dictationMode != .afterPhrase
+                    ? .liveDictateToCursor : .dictateToCursor
+                result.append((s.settings.dictateHotkey, action))
+            }
+            if !s.settings.translateDictateHotkey.isEmpty {
+                result.append((s.settings.translateDictateHotkey, .dictateTranslateToCursor))
+            }
+            return result
         }
         VoiceHotkeys.shared.onStart = { [weak appState] action in
             switch action {
@@ -195,6 +205,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         applyChrome()
 
         showOnboardingIfNeeded()
+        NSLog("BabelBar startup: UI and shortcuts registered in %.0f ms",
+              (ProcessInfo.processInfo.systemUptime - launchStartedAt) * 1000)
+        DispatchQueue.main.async { [weak self] in
+            RecordingOverlay.shared.prepare()
+            self?.appState.prepareVoiceInput()
+        }
     }
 
     private func nsAppearance(_ isDark: Bool) -> NSAppearance? {

@@ -321,6 +321,7 @@ struct HotKeyRecorder: View {
     var requireModifier: Bool = true
     var doubleTap: Bool = false
     var recordingPrompt: String = "Press keys…"
+    var clearLabel: String = "Clear"
     var onChange: () -> Void
 
     @State private var recording = false
@@ -336,6 +337,7 @@ struct HotKeyRecorder: View {
 
     var body: some View {
         let _ = revision
+        return HStack(spacing: 6) {
         Button {
             recording ? stop() : start()
         } label: {
@@ -357,13 +359,27 @@ struct HotKeyRecorder: View {
         }
         .buttonStyle(.plain)
         .onHover { hover = $0 }
+        if combo.isAssigned {
+            Button { clear() } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .foregroundColor(Theme.textSecondary)
+            }
+            .buttonStyle(.plain)
+            .help(clearLabel)
+            .accessibilityLabel(clearLabel)
+        }
+        }
         .onDisappear(perform: stop)
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in stop() }
     }
 
     private func start() {
         recording = true
-        monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+        HotKeyManager.shared.setShortcutRecording(true)
+        monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .leftMouseDown]) { event in
+            if event.type == .leftMouseDown { stop(); return event }
             if event.keyCode == 53 { stop(); return nil } // Esc cancels
+            if event.keyCode == 51 || event.keyCode == 117 { clear(); return nil }
 
             let mods = event.modifierFlags.intersection([.command, .shift, .option, .control])
             // Require at least one modifier (unless it's a function key) to avoid grabbing plain keys.
@@ -384,8 +400,16 @@ struct HotKeyRecorder: View {
     }
 
     private func stop() {
+        guard recording else { return }
         recording = false
         if let m = monitor { NSEvent.removeMonitor(m); monitor = nil }
+        HotKeyManager.shared.setShortcutRecording(false)
+    }
+
+    private func clear() {
+        stop()
+        combo = .unassigned
+        onChange()
     }
 }
 

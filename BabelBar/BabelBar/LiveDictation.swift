@@ -3,234 +3,605 @@ import Speech
 import AVFoundation
 import AppKit
 
-struct LiveSpeechWord {
-    let text: String
-    let start: TimeInterval
-    let end: TimeInterval
-}
-
-/// Pure transcript bookkeeping, independent of the active editor. Timestamps
-/// identify audio already committed across overlapping recognition requests.
-/// A text alignment fallback handles partials without usable segment timing.
-struct LiveTranscript {
-    private(set) var committed = ""
-    private(set) var volatile = ""
-    private var through: TimeInterval?
-    private var latestEnd: TimeInterval?
-    private var history: [String] = []
-    private var frozenPrefix: [String] = []
-    private var lastWords: [String] = []
-
-    /// `correctSpan` corrects a span that continues already committed text (a line
-    /// break command may open it); it defaults to `correct`.
-    mutating func update(_ text: String, timed: [LiveSpeechWord], correct: (String) -> String,
-                         correctSpan: ((String) -> String)? = nil) {
-        let canonical = Self.words(correct(text))
-        let content = Self.withoutReplay(canonical, history: history)
-        lastWords = content
-        let validTiming = !timed.isEmpty && timed.allSatisfy { $0.end > $0.start && $0.start >= 0 }
-        latestEnd = validTiming ? timed.last?.end : nil
-        if validTiming, let through {
-            let fresh = timed.filter { ($0.start + $0.end) / 2 > through + 0.01 }
-            let joined = fresh.map(\.text).joined(separator: " ")
-            if committed.isEmpty { volatile = correct(joined) }
-            else if let correctSpan { volatile = correctSpan(joined) }
-            else { volatile = correct(joined) }
-        } else {
-            let offset = Self.prefixBoundary(frozenPrefix, in: content)
-            volatile = content.dropFirst(offset).joined(separator: " ")
-        }
-    }
-
-    @discardableResult
-    mutating func freeze() -> String {
-        let result = volatile
-        committed = Self.join(committed, volatile)
-        volatile = ""
-        frozenPrefix = lastWords
-        // If partial timing is unavailable, keep using text alignment until a
-        // later committed result establishes a reliable audio boundary.
-        if let latestEnd { through = max(through ?? 0, latestEnd) }
-        else { through = nil }
-        return result
-    }
-
-    var volatileWordCount: Int { Self.words(volatile).count }
-
-    /// Phrase mode: commit the stable head of the volatile span and keep the last
-    /// `hold` words, which the recognizer still revises. Text alignment takes over
-    /// from audio timestamps, so the held words stay volatile in the next update.
-    @discardableResult
-    mutating func freezeStable(holding hold: Int) -> String {
-        let words = Self.words(volatile)
-        guard words.count > hold else { return "" }
-        let stable = words.dropLast(hold).joined(separator: " ")
-        committed = Self.join(committed, stable)
-        volatile = words.suffix(hold).joined(separator: " ")
-        frozenPrefix = Array(lastWords.dropLast(hold))
-        through = nil
-        return stable
-    }
-
-    mutating func restarted() {
-        history = Array((history + lastWords).suffix(250))
-        frozenPrefix = []; lastWords = []
-    }
-
-    var target: String { Self.join(committed, volatile) }
-    static func join(_ a: String, _ b: String) -> String {
-        guard !a.isEmpty, !b.isEmpty else { return a.isEmpty ? b : a }
-        return a.hasSuffix("\n") || b.hasPrefix("\n") ? a + b : a + " " + b
-    }
-    static func words(_ s: String) -> [String] { s.components(separatedBy: " ").filter { !$0.isEmpty } }
-    static func key(_ s: String) -> String {
-        s.lowercased().replacingOccurrences(of: "ё", with: "е").filter { $0.isLetter || $0.isNumber }
-    }
-
-    /// Recompute on EVERY partial of the new request. A partial matching only
-    /// the middle of the replay is held until the rest of that overlap arrives.
-    static func withoutReplay(_ words: [String], history: [String]) -> [String] {
-        guard !history.isEmpty, !words.isEmpty else { return words }
-        let incoming = words.map(key)
-        let old = history.map(key)
-        var best = 0
-        for start in old.indices {
-            let suffix = Array(old[start...])
-            let n = min(suffix.count, incoming.count)
-            if Array(suffix.prefix(n)) == Array(incoming.prefix(n)) { best = max(best, n) }
-        }
-        return Array(words.dropFirst(best))
-    }
-
-    /// Align the frozen text with the new partial instead of counting old words.
-    /// Canonical dictionary forms make "некст джей эс" and "Next.js" equivalent.
-    /// Character-prefix matching also handles tokenization changes such as
-    /// "по этому" → "поэтому". Bounded edit alignment handles revised wording.
-    static func prefixBoundary(_ prefix: [String], in words: [String]) -> Int {
-        guard !prefix.isEmpty else { return 0 }
-        let wanted = prefix.map(key).joined()
-        var joined = ""
-        for (i, word) in words.enumerated() {
-            joined += key(word)
-            if joined == wanted { return i + 1 }
-            if joined.count > wanted.count { break }
-        }
-        let a = prefix.map(key), b = words.map(key)
-        var exact = 0
-        while exact < a.count, exact < b.count, a[exact] == b[exact] { exact += 1 }
-        if exact == a.count || exact == b.count { return exact }
-        // Only align the differing tail. An unbounded matrix would penalize long dictation.
-        let left = Array(a.dropFirst(exact).prefix(128))
-        let right = Array(b.dropFirst(exact).prefix(left.count + 16))
-        guard a.count - exact <= 128 else { return words.count } // ambiguous: preserve frozen text
-        var row = Array(0...right.count)
-        for (i, token) in left.enumerated() {
-            var next = [i + 1] + Array(repeating: 0, count: right.count)
-            for j in right.indices {
-                next[j + 1] = min(next[j] + 1, row[j + 1] + 1, row[j] + (token == right[j] ? 0 : 1))
-            }
-            row = next
-        }
-        var best = 0
-        for index in 1...max(1, right.count) where index <= right.count {
-            let cost = row[index], previousCost = row[best]
-            let distance = abs(index - left.count), previousDistance = abs(best - left.count)
-            if cost < previousCost || (cost == previousCost && distance < previousDistance) { best = index }
-        }
-        return exact + best
-    }
-}
-
-/// All lifecycle and callbacks are serialized on main. The audio lock covers
-/// replay, request replacement and append order; obsolete callbacks are checked
-/// again AFTER hopping to main. Replaced tasks and retry timers are cancelled.
+/// One Apple Speech request per utterance. All request state and audio appends run
+/// on `queue`; the audio tap only copies its buffer and enqueues it. UI callbacks
+/// are delivered on main in the same order as recognition events.
 final class AppleSpeechStreamer {
-    var onPartial: ((String, [LiveSpeechWord], Bool) -> Void)?
-    var onRestart: (() -> Void)?
+    /// The current segment's live (not yet final) guess. May be called repeatedly
+    /// with a revised text for the same segment; never called after that segment's
+    /// `onSegmentFinal`.
+    var onPartial: ((String) -> Void)?
+    /// A segment has finalized (silence, forced cutoff, or a recognizer error) and
+    /// its text is now permanent. May be called with an empty string.
+    var onSegmentFinal: ((String) -> Void)?
+    /// Recognition failed repeatedly or incoming audio could not be buffered.
+    var onFailure: (() -> Void)?
+
+    private let queue = DispatchQueue(label: "com.babelbar.speech-stream", qos: .userInitiated)
     private let recognizer: SFSpeechRecognizer
     private let contextual: [String]
     private let requiresOnDevice: Bool
-    private let lock = NSLock()
     private var request: SFSpeechAudioBufferRecognitionRequest?
     private var task: SFSpeechRecognitionTask?
     private var wantsAudio = false
+    private var stopping = false
+    private var awaitingFinal = false
+    private var onFlushed: (() -> Void)?
     private var generation = 0
-    private var replay: [AVAudioPCMBuffer] = []
-    private var replaySeconds = 0.0
-    private var audioSeconds = 0.0
-    private var retry: DispatchWorkItem?
-    private var lastRestart = Date.distantPast
+    private var pendingBuffers: [AVAudioPCMBuffer] = []
+    private var pendingSeconds: TimeInterval = 0
+    private var lastPartialText = ""
+    private var recentErrors: [Date] = []
+
+    // Voice activity detection, driven by every incoming buffer.
+    private var voiceSeenInSegment = false
+    private var silentSeconds: TimeInterval = 0
+    private var segmentSeconds: TimeInterval = 0
+    private static let silenceRMS: Float = 0.004
+    private static let silenceHang: TimeInterval = 0.8
+    private static let maxSegmentDuration: TimeInterval = 45
+    private static let localFinalizeTimeout: TimeInterval = 2.5
+    private static let remoteFinalizeTimeout: TimeInterval = 5
+    private static let maxPendingSeconds: TimeInterval = 8
 
     init(recognizer: SFSpeechRecognizer, contextual: [String], requiresOnDevice: Bool) {
         self.recognizer = recognizer; self.contextual = contextual; self.requiresOnDevice = requiresOnDevice
     }
-    func start() { wantsAudio = true; beginRequest() }
+
+    func start() {
+        queue.async {
+            self.wantsAudio = true
+            self.beginRequest()
+        }
+    }
+
     func append(buffer: AVAudioPCMBuffer) {
-        lock.lock(); defer { lock.unlock() }
-        guard let copy = AVAudioPCMBuffer(pcmFormat: buffer.format, frameCapacity: buffer.frameLength) else { return }
+        // AVAudioEngine reuses tap buffers. Retain an independent copy before the
+        // callback returns; no mutable streamer state is touched on the audio thread.
+        guard let copy = Self.copy(buffer) else { return }
+        queue.async { self.appendQueued(copy) }
+    }
+
+    private func appendQueued(_ buffer: AVAudioPCMBuffer) {
+        guard wantsAudio else { return }
+        let duration = Double(buffer.frameLength) / buffer.format.sampleRate
+        if awaitingFinal {
+            // Audio arriving during finalization belongs to the next request.
+            pendingBuffers.append(buffer)
+            pendingSeconds += duration
+            if pendingSeconds > Self.maxPendingSeconds {
+                fail("pending audio exceeded \(Self.maxPendingSeconds) seconds")
+            }
+            return
+        }
+        request?.append(buffer)
+        segmentSeconds += duration
+        if Self.rms(of: buffer) > Self.silenceRMS {
+            voiceSeenInSegment = true; silentSeconds = 0
+        } else {
+            silentSeconds += duration
+        }
+        if voiceSeenInSegment, silentSeconds >= Self.silenceHang { endSegment() }
+        else if segmentSeconds >= Self.maxSegmentDuration { endSegment() }
+    }
+
+    func cancel() {
+        queue.async { self.cancelQueued() }
+    }
+
+    private func cancelQueued() {
+        let audioAlreadyEnded = awaitingFinal
+        wantsAudio = false; stopping = false; awaitingFinal = false; onFlushed = nil
+        generation += 1
+        if !audioAlreadyEnded { request?.endAudio() }
+        request = nil
+        task?.cancel(); task = nil
+        pendingBuffers = []; pendingSeconds = 0; lastPartialText = ""
+        recentErrors = []
+    }
+
+    /// Ends the in-flight segment, waits for it to finalize (falling back to its
+    /// last known partial if the recognizer doesn't), reports it once more via
+    /// `onSegmentFinal`, then calls `completion`. Does not open a new segment.
+    func flush(_ completion: @escaping () -> Void) {
+        queue.async {
+            guard self.wantsAudio, !self.stopping else {
+                DispatchQueue.main.async(execute: completion)
+                return
+            }
+            self.stopping = true; self.onFlushed = completion
+            // Frames queued while the previous request was finalizing are part of
+            // this stop, so feed them to one last request before closing it.
+            if self.awaitingFinal { return }
+            self.endSegment()
+        }
+    }
+
+    /// A stuck recognizer is closed before another task opens. Its latest partial
+    /// is committed once, so restarting does not silently discard known words.
+    func forceRestart() {
+        queue.async {
+            guard self.wantsAudio, !self.stopping, !self.awaitingFinal else { return }
+            NSLog("BabelBar live-dictation: restarting stalled recognizer")
+            self.finishSegment(self.lastPartialText)
+        }
+    }
+
+    private func endSegment() {
+        guard wantsAudio, !awaitingFinal else { return }
+        awaitingFinal = true; voiceSeenInSegment = false; silentSeconds = 0; segmentSeconds = 0
+        request?.endAudio()
+        let gen = generation
+        let timeout = requiresOnDevice ? Self.localFinalizeTimeout : Self.remoteFinalizeTimeout
+        queue.asyncAfter(deadline: .now() + timeout) { [weak self] in
+            guard let self, self.awaitingFinal, self.generation == gen else { return }
+            NSLog("BabelBar live-dictation: final result timed out; using latest partial")
+            self.finishSegment(self.lastPartialText)
+        }
+    }
+
+    private func finishSegment(_ text: String) {
+        guard wantsAudio else { return }
+        let audioAlreadyEnded = awaitingFinal
+        awaitingFinal = false
+        lastPartialText = ""
+        // Invalidate callbacks before canceling the previous task. Even a normal
+        // isFinal can arrive without our silence detector first calling endAudio.
+        generation += 1
+        if !audioAlreadyEnded { request?.endAudio() }
+        request = nil
+        task?.cancel(); task = nil
+        DispatchQueue.main.async { [weak self] in self?.onSegmentFinal?(text) }
+        if stopping {
+            if !pendingBuffers.isEmpty {
+                beginRequest()
+                endSegment()
+                return
+            }
+            wantsAudio = false
+            let done = onFlushed; onFlushed = nil
+            if let done { DispatchQueue.main.async(execute: done) }
+            return
+        }
+        beginRequest()
+    }
+
+    private func beginRequest() {
+        generation += 1
+        let gen = generation
+        voiceSeenInSegment = false; silentSeconds = 0; segmentSeconds = 0
+        let next = SFSpeechAudioBufferRecognitionRequest()
+        next.shouldReportPartialResults = true; next.addsPunctuation = true
+        next.contextualStrings = contextual; next.requiresOnDeviceRecognition = requiresOnDevice
+        let queued = pendingBuffers; pendingBuffers = []; pendingSeconds = 0
+        for buffer in queued { next.append(buffer) }
+        request = next
+        task = recognizer.recognitionTask(with: next) { [weak self] result, error in
+            self?.queue.async { [weak self] in
+                guard let self, self.wantsAudio, self.generation == gen else { return }
+                if let result {
+                    let text = result.bestTranscription.formattedString
+                    if !text.isEmpty { self.recentErrors.removeAll() }
+                    if result.isFinal {
+                        self.finishSegment(text)
+                    } else {
+                        self.lastPartialText = text
+                        if !text.isEmpty { self.voiceSeenInSegment = true }
+                        DispatchQueue.main.async { [weak self] in self?.onPartial?(text) }
+                    }
+                    return
+                }
+                guard let error else { return }
+                let nsError = error as NSError
+                NSLog("BabelBar live-dictation: recognizer error %@/%ld", nsError.domain, nsError.code)
+                // Apple's 1110 means that this request contained no recognizable
+                // speech. A quiet segment is normal during a long dictation and
+                // must not count toward the failure threshold for the session.
+                if nsError.domain == "kAFAssistantErrorDomain", nsError.code == 1110 {
+                    self.finishSegment(self.lastPartialText)
+                    return
+                }
+                let now = Date()
+                self.recentErrors.removeAll { now.timeIntervalSince($0) > 30 }
+                self.recentErrors.append(now)
+                if self.recentErrors.count >= 3, !self.stopping {
+                    self.fail("recognizer failed three times within 30 seconds")
+                } else {
+                    self.finishSegment(self.lastPartialText)
+                }
+            }
+        }
+    }
+
+    private func fail(_ reason: String) {
+        NSLog("BabelBar live-dictation: %@", reason)
+        cancelQueued()
+        DispatchQueue.main.async { [weak self] in self?.onFailure?() }
+    }
+
+    private static func copy(_ buffer: AVAudioPCMBuffer) -> AVAudioPCMBuffer? {
+        guard let copy = AVAudioPCMBuffer(pcmFormat: buffer.format, frameCapacity: buffer.frameLength) else { return nil }
         copy.frameLength = buffer.frameLength
         let source = UnsafeMutableAudioBufferListPointer(buffer.mutableAudioBufferList)
         let destination = UnsafeMutableAudioBufferListPointer(copy.mutableAudioBufferList)
         for i in source.indices {
-            guard let src = source[i].mData, let dst = destination[i].mData else { return }
+            guard let src = source[i].mData, let dst = destination[i].mData else { return nil }
             memcpy(dst, src, Int(source[i].mDataByteSize))
         }
-        let duration = Double(buffer.frameLength) / buffer.format.sampleRate
-        audioSeconds += duration; replaySeconds += duration; replay.append(copy)
-        while replaySeconds > 6, let first = replay.first {
-            replaySeconds -= Double(first.frameLength) / first.format.sampleRate
-            replay.removeFirst()
-        }
-        request?.append(buffer)
+        return copy
     }
-    func cancel() {
-        wantsAudio = false; generation += 1; retry?.cancel(); retry = nil
-        lock.lock(); let old = request; request = nil; lock.unlock()
-        old?.endAudio(); task?.cancel(); task = nil
+
+    /// Plain RMS (not the perceptual curve `AudioRecorder.micLevel` uses for the
+    /// waveform) — a linear threshold is what a silence gate wants.
+    private static func rms(of buffer: AVAudioPCMBuffer) -> Float {
+        guard let channels = buffer.floatChannelData else { return 0 }
+        let n = Int(buffer.frameLength)
+        guard n > 0 else { return 0 }
+        let samples = channels[0]
+        var sum: Float = 0
+        for i in 0..<n { let s = samples[i]; sum += s * s }
+        return (sum / Float(n)).squareRoot()
     }
-    func restartNow() {
-        guard wantsAudio, retry == nil else { return }
-        let work = DispatchWorkItem { [weak self] in
-            guard let self, self.wantsAudio else { return }
-            self.retry = nil; self.lastRestart = Date()
-            self.onRestart?(); self.beginRequest()
-        }
-        retry = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + max(0, 0.6 - Date().timeIntervalSince(lastRestart)), execute: work)
+}
+
+/// WhisperKit live mode. Audio is captured once by `AudioRecorder`, converted to
+/// Whisper's 16 kHz mono format, and decoded locally in short utterance segments.
+/// While a segment is still open, newer snapshots revise the interim text; silence
+/// or the user's stop finalizes it once. Decoding is serialized to avoid overlapping
+/// CoreML work and losing the tail of a sentence.
+/// Mutable state is confined to `queue`; `transcriber` is an actor. Async decode
+/// completions hop back to that queue before reading or changing any fields.
+final class WhisperKitLiveStreamer: @unchecked Sendable {
+    var onPartial: ((String) -> Void)?
+    var onSegmentFinal: ((String) -> Void)?
+    var onFailure: (() -> Void)?
+
+    private let queue = DispatchQueue(label: "com.babelbar.whisper-live", qos: .userInitiated)
+    private let transcriber: LocalWhisperTranscriber
+    private let language: Lang?
+    private var wantsAudio = false
+    private var loaded = false
+    private var loading = false
+    private var stopping = false
+    private var finalizing = false
+    private var decoding = false
+    private var generation = 0
+    private var current: [Float] = []
+    private var pending: [[Float]] = []
+    private var pendingSamples = 0
+    private var lastDecodedCount = 0
+    private var lastVoicedCount = 0
+    private var voiceSeen = false
+    private var candidateVoicedSamples = 0
+    private var silentSamples = 0
+    private var onFlushed: (() -> Void)?
+    private var latestText = ""
+    private var recentFailures: [Date] = []
+
+    private let sampleRate = 16_000
+    private let voiceRMS: Float = 0.004
+    private let minVoiceDuration = 0.16
+    private let partialInterval = 1.2
+    private let silenceHang = 0.7
+    private let shortPause = 0.22
+    private let softSegmentDuration = 4.0
+    private let maxSegmentDuration = 7.0
+    private let maxPendingDuration = 120.0
+
+    init(transcriber: LocalWhisperTranscriber, language: Lang?) {
+        self.transcriber = transcriber
+        self.language = language
     }
-    private func beginRequest() {
-        generation += 1
-        let gen = generation
-        task?.cancel(); task = nil
-        let next = SFSpeechAudioBufferRecognitionRequest()
-        next.shouldReportPartialResults = true; next.addsPunctuation = true
-        next.contextualStrings = contextual; next.requiresOnDeviceRecognition = requiresOnDevice
-        lock.lock()
-        request?.endAudio()
-        let offset = max(0, audioSeconds - replaySeconds)
-        for buffer in replay { next.append(buffer) }
-        request = next
-        lock.unlock()
-        task = recognizer.recognitionTask(with: next) { [weak self] result, error in
-            DispatchQueue.main.async {
-                guard let self, self.wantsAudio, self.generation == gen else { return }
-                if let result {
-                    let transcription = result.bestTranscription
-                    let formatted = transcription.formattedString as NSString
-                    let segments = transcription.segments
-                    let words = segments.enumerated().map { i, segment in
-                        let end = i + 1 < segments.count ? segments[i + 1].substringRange.location : formatted.length
-                        let text = formatted.substring(with: NSRange(location: segment.substringRange.location,
-                                                                     length: max(0, end - segment.substringRange.location)))
-                            .trimmingCharacters(in: .whitespacesAndNewlines)
-                        return LiveSpeechWord(text: text, start: offset + segment.timestamp,
-                                              end: offset + segment.timestamp + segment.duration)
+
+    func start() {
+        queue.async {
+            self.wantsAudio = true
+            guard !self.loading, !self.loaded else { self.pump(); return }
+            self.loading = true
+            Task {
+                do {
+                    try await self.transcriber.preload()
+                    self.queue.async {
+                        guard self.wantsAudio else { return }
+                        self.loading = false; self.loaded = true
+                        NSLog("BabelBar live-whisperkit: model ready")
+                        self.pump()
                     }
-                    self.onPartial?(transcription.formattedString, words, result.isFinal)
+                } catch {
+                    self.queue.async {
+                        guard self.wantsAudio else { return }
+                        self.loading = false
+                        self.fail("WhisperKit model could not be loaded: \(error.localizedDescription)")
+                    }
                 }
-                if error != nil || result?.isFinal == true { self.restartNow() }
             }
         }
+    }
+
+    func append(samples: [Float]) {
+        guard !samples.isEmpty else { return }
+        queue.async { self.ingest(samples) }
+    }
+
+    private func ingest(_ samples: [Float]) {
+        guard wantsAudio else { return }
+        if finalizing {
+            pending.append(samples); pendingSamples += samples.count
+            if Double(pendingSamples) / Double(sampleRate) > maxPendingDuration {
+                fail("WhisperKit could not keep up with incoming audio")
+            }
+            return
+        }
+
+        let rms = Self.rms(samples)
+        if !voiceSeen {
+            // Require more than one loud microphone buffer before treating a
+            // click or background transient as speech. Preserve its onset.
+            current.append(contentsOf: samples)
+            let preRoll = Int(0.45 * Double(sampleRate))
+            if current.count > preRoll { current.removeFirst(current.count - preRoll) }
+            if rms > voiceRMS { candidateVoicedSamples += samples.count }
+            else { candidateVoicedSamples = max(0, candidateVoicedSamples - samples.count / 2) }
+            guard candidateVoicedSamples >= Int(minVoiceDuration * Double(sampleRate)) else { return }
+            voiceSeen = true
+            lastVoicedCount = current.count
+            silentSamples = 0
+        } else {
+            current.append(contentsOf: samples)
+            if rms > voiceRMS { silentSamples = 0; lastVoicedCount = current.count }
+            else { silentSamples += samples.count }
+        }
+
+        let duration = Double(current.count) / Double(sampleRate)
+        let pause = Double(silentSamples) / Double(sampleRate)
+        if voiceSeen, pause >= silenceHang || (duration >= softSegmentDuration && pause >= shortPause) {
+            finalizing = true
+        } else if duration >= maxSegmentDuration {
+            finalizing = true
+        }
+        pump()
+    }
+
+    func flush(_ completion: @escaping () -> Void) {
+        queue.async {
+            guard self.wantsAudio else { DispatchQueue.main.async(execute: completion); return }
+            self.stopping = true; self.onFlushed = completion
+            self.finalizing = true
+            self.pump()
+        }
+    }
+
+    func forceRestart() {
+        queue.async {
+            guard self.wantsAudio, !self.stopping, !self.current.isEmpty else { return }
+            NSLog("BabelBar live-whisperkit: finalizing stalled segment")
+            self.finalizing = true
+            self.pump()
+        }
+    }
+
+    func cancel() {
+        queue.async {
+            self.generation += 1
+            self.wantsAudio = false; self.stopping = false; self.finalizing = false
+            self.current.removeAll(); self.pending.removeAll(); self.pendingSamples = 0
+            self.latestText = ""; self.onFlushed = nil
+        }
+    }
+
+    private func pump() {
+        guard wantsAudio, loaded, !loading, !decoding else { return }
+        guard !current.isEmpty else {
+            if stopping { finishFlush() }
+            else { beginNextPending() }
+            return
+        }
+        let isFinal = finalizing || stopping
+        if isFinal, (!voiceSeen || AudioRecorder.isSilent(current)) {
+            emitFinal("")
+            return
+        }
+        if !isFinal, !voiceSeen { return }
+        // The last partial already covered every voiced sample. A trailing pause
+        // cannot add words; avoid a second full decode just to finalize it.
+        if isFinal, lastDecodedCount > 0, lastDecodedCount >= lastVoicedCount {
+            emitFinal(latestText)
+            return
+        }
+        if !isFinal, current.count - lastDecodedCount < Int(partialInterval * Double(sampleRate)) { return }
+        decode(Array(current), final: isFinal)
+    }
+
+    private func decode(_ samples: [Float], final: Bool) {
+        decoding = true
+        let id = generation
+        lastDecodedCount = current.count
+        let started = Date()
+        Task {
+            do {
+                let text = try await transcriber.transcribeLive(samples: samples, language: language)
+                queue.async {
+                    guard self.wantsAudio, self.generation == id else { return }
+                    NSLog("BabelBar live-whisperkit: decode %.2fs for %.2fs audio (%@, %ld chars)",
+                          Date().timeIntervalSince(started), Double(samples.count) / Double(self.sampleRate),
+                          final ? "final" : "partial", text.count)
+                    self.decoding = false
+                    self.latestText = text
+                    self.recentFailures.removeAll()
+                    if final {
+                        self.emitFinal(text)
+                    } else {
+                        DispatchQueue.main.async { [weak self] in self?.onPartial?(text) }
+                        self.pump()
+                    }
+                }
+            } catch {
+                queue.async {
+                    guard self.wantsAudio, self.generation == id else { return }
+                    self.decoding = false
+                    NSLog("BabelBar live-whisperkit: decode error: %@", error.localizedDescription)
+                    let now = Date()
+                    self.recentFailures.removeAll { now.timeIntervalSince($0) > 30 }
+                    self.recentFailures.append(now)
+                    if final, !self.latestText.isEmpty {
+                        self.emitFinal(self.latestText)
+                    } else if self.recentFailures.count >= 3 {
+                        self.fail("WhisperKit failed three times within 30 seconds")
+                    } else {
+                        self.pump()
+                    }
+                }
+            }
+        }
+    }
+
+    private func emitFinal(_ text: String) {
+        NSLog("BabelBar live-whisperkit: segment finalized (%ld characters)", text.count)
+        generation += 1
+        decoding = false; finalizing = false
+        current.removeAll(keepingCapacity: true); lastDecodedCount = 0; lastVoicedCount = 0
+        voiceSeen = false; candidateVoicedSamples = 0; silentSamples = 0; latestText = ""
+        DispatchQueue.main.async { [weak self] in self?.onSegmentFinal?(text) }
+        beginNextPending()
+        if current.isEmpty, pending.isEmpty, stopping { finishFlush() }
+        else { pump() }
+    }
+
+    private func beginNextPending() {
+        guard !pending.isEmpty else { return }
+        let chunks = pending; pending.removeAll(keepingCapacity: true); pendingSamples = 0
+        current.removeAll(keepingCapacity: true); lastDecodedCount = 0; lastVoicedCount = 0; finalizing = false
+        voiceSeen = false; candidateVoicedSamples = 0; silentSamples = 0; latestText = ""
+        for chunk in chunks { ingest(chunk) }
+    }
+
+    private func finishFlush() {
+        guard stopping else { return }
+        wantsAudio = false; stopping = false; finalizing = false
+        let done = onFlushed; onFlushed = nil
+        if let done { DispatchQueue.main.async(execute: done) }
+    }
+
+    private func fail(_ reason: String) {
+        NSLog("BabelBar live-whisperkit: %@", reason)
+        generation += 1; wantsAudio = false; decoding = false; loading = false
+        current.removeAll(); pending.removeAll(); pendingSamples = 0
+        let callback = onFailure
+        DispatchQueue.main.async { callback?() }
+    }
+
+    private static func rms(_ samples: [Float]) -> Float {
+        guard !samples.isEmpty else { return 0 }
+        var sum: Float = 0
+        for sample in samples { sum += sample * sample }
+        return (sum / Float(samples.count)).squareRoot()
+    }
+}
+
+/// How a finalized segment joins onto what's already committed — no space is
+/// inserted around a line break a voice command just produced.
+enum LiveJoin {
+    static func join(_ a: String, _ b: String) -> String {
+        guard !a.isEmpty, !b.isEmpty else { return a.isEmpty ? b : a }
+        if a.last?.isWhitespace == true || b.first?.isWhitespace == true { return a + b }
+        return a + " " + b
+    }
+
+    /// Add one space after punctuation inside a recognized fragment and, for a
+    /// finalized fragment, also at its end. Keep decimal numbers and common
+    /// domains/file extensions intact. Existing whitespace is never doubled.
+    static func spaceAfterPunctuation(_ text: String, atEnd: Bool = false) -> String {
+        let characters = Array(text)
+        let marks: Set<Character> = [".", ",", ";", ":", "!", "?", "…", "—", "–"]
+        let noSpaceBefore: Set<Character> = [".", ",", ";", ":", "!", "?", "…", ")", "]", "}", "»", "\""]
+        let compactSuffixes: Set<String> = ["com", "net", "org", "ru", "io", "app", "dev", "js", "ts", "py", "swift"]
+        var output = ""
+        for index in characters.indices {
+            let mark = characters[index]
+            output.append(mark)
+            guard marks.contains(mark) else { continue }
+            let nextIndex = index + 1
+            guard nextIndex < characters.count else {
+                if atEnd { output.append(" ") }
+                continue
+            }
+            let next = characters[nextIndex]
+            guard !next.isWhitespace, !noSpaceBefore.contains(next), next.isLetter || next.isNumber else { continue }
+            if (mark == "." || mark == ","), index > 0,
+               characters[index - 1].isNumber, next.isNumber { continue }
+            if mark == ".", next.isLetter {
+                let suffix = String(characters[nextIndex...].prefix(while: { $0.isLetter })).lowercased()
+                if compactSuffixes.contains(suffix) { continue }
+            }
+            output.append(" ")
+        }
+        return output
+    }
+}
+
+/// Whisper's stock answers to silence and microphone noise. Match only a whole
+/// short transcript so a real sentence containing these words is not removed.
+enum WhisperTranscriptFilter {
+    private static let fillerPhrases: Set<String> = [
+        "thanks for watching", "thank you for watching", "please subscribe",
+        "subscribe to my channel", "продолжение следует",
+        "субтитры сделал dimatorzok", "субтитры создавал dimatorzok",
+        "редактор субтитров а.синецкая корректор а.егорова", "спасибо за просмотр",
+    ]
+
+    static func isFiller(_ text: String) -> Bool {
+        let stripped = text.lowercased().trimmingCharacters(
+            in: CharacterSet.whitespacesAndNewlines.union(CharacterSet(charactersIn: ".,!?…")))
+        let key = stripped.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        return key.isEmpty || fillerPhrases.contains(key)
+    }
+}
+
+/// WhisperKit can revise its latest hypothesis. Paste complete words from each
+/// hypothesis immediately, keeping the last word provisional.
+/// This gives other applications append-only updates without needing their AX
+/// text value or deleting text around the caret.
+struct WhisperLiveCommitter {
+    private(set) var committed = ""
+    private var emitted = ""
+
+    mutating func partial(_ text: String) -> String {
+        guard let boundary = text.lastIndex(where: { $0.isWhitespace }) else { return "" }
+        let stable = String(text[...boundary])
+        guard stable.hasPrefix(emitted), stable.count > emitted.count else { return "" }
+        let delta = emitted.isEmpty
+            ? String(LiveJoin.join(committed, stable).dropFirst(committed.count))
+            : String(stable.dropFirst(emitted.count))
+        emitted = stable
+        return delta
+    }
+
+    /// Returns the remaining paste fragment and the segment actually written.
+    /// If the model changes an already pasted word, keep the visible word and
+    /// append only words that follow it; silently rewriting another app's text
+    /// would require dependable AX access, which many editors do not provide.
+    mutating func finalize(_ final: String) -> (delta: String, segment: String) {
+        let segment: String
+        if emitted.isEmpty || final.hasPrefix(emitted) {
+            segment = final.isEmpty ? emitted : final
+        } else {
+            let emittedWords = emitted.split(whereSeparator: \.isWhitespace).count
+            let finalWords = final.split(whereSeparator: \.isWhitespace)
+            if finalWords.count > emittedWords {
+                let tail = finalWords.dropFirst(emittedWords).joined(separator: " ")
+                segment = emitted + (emitted.last?.isWhitespace == true ? "" : " ") + tail
+            } else if final.count > emitted.count, finalWords.count <= 1 {
+                segment = emitted + String(final.dropFirst(emitted.count))
+            } else {
+                segment = emitted
+            }
+        }
+        let delta = emitted.isEmpty
+            ? String(LiveJoin.join(committed, segment).dropFirst(committed.count))
+            : String(segment.dropFirst(emitted.count))
+        committed = LiveJoin.join(committed, segment)
+        emitted = ""
+        return (delta, segment)
     }
 }
 
@@ -251,22 +622,36 @@ final class LiveDictationController {
     var isRunning: Bool { phase != .idle }
     private var recorder = AudioRecorder()
     private var streamer: AppleSpeechStreamer?
+    private var whisperStreamer: WhisperKitLiveStreamer?
     private let typer = LiveTyper.shared
     private let inputGuard = LiveInputGuard()
     private var settings: AppSettings?
+    private var localTranscriber: LocalWhisperTranscriber?
     private var rules: [DictEntry] = []
-    private var transcript = LiveTranscript()
-    private var renderedCommitted = ""
+    /// Everything already written to the field — permanent, never revised.
+    private var committedText = ""
+    /// The current segment's live guess — freely rewritten until it finalizes.
+    private var interimText = ""
+    private var whisperCommitter = WhisperLiveCommitter()
+    private var livePaste: LivePasteSession?
     private var target: AXLiveTextTarget?
-    private var freezeTimer: DispatchWorkItem?
+    private var destinationPID: pid_t?
     private var watchdog: Timer?
     private var appObserver: Any?
-    private var lastPartial = Date()
+    private var lastActivity = Date()
+    private var startRequestedAt: TimeInterval?
+    private var microphoneStartedAt: TimeInterval?
+    private var loggedFirstPartial = false
+    private var targetAcquisitionInFlight = false
     private var session = UUID()
     private var finishingTask: Task<Void, Never>?
     private var reportError: ((LKey) -> Void)?
 
-    func start(settings: AppSettings, onError: @escaping (LKey) -> Void) {
+    func prepareMicrophone() { recorder.prepare() }
+    func releasePreparedMicrophone() { recorder.releasePrepared() }
+
+    func start(settings: AppSettings, localTranscriber: LocalWhisperTranscriber? = nil,
+               onError: @escaping (LKey) -> Void) {
         // The hotkey state machine just began a new session. A press that finds a
         // session already listening means "stop"; resync the machine so the next
         // press starts cleanly instead of running one step out of phase.
@@ -277,21 +662,48 @@ final class LiveDictationController {
         }
         if phase == .finishing { abort(resetHotkeys: false) }
         guard phase == .idle else { return }
+        startRequestedAt = ProcessInfo.processInfo.systemUptime
+        targetAcquisitionInFlight = false
         phase = .starting; session = UUID()
         let id = session
-        self.settings = settings; reportError = onError
+        self.settings = settings; self.localTranscriber = localTranscriber; reportError = onError
         rules = PersonalDictionaryStore.shared.activeRules(developerEnabled: settings.developerDictionaryEnabled)
+        if settings.dictationMode == .liveWhisperKit {
+            guard WhisperModelManager.isVariantOnDisk(settings.whisperModel.variant) else {
+                abort(error: .errWhisperModelMissing); return
+            }
+            guard let app = NSWorkspace.shared.frontmostApplication,
+                  app.bundleIdentifier != Bundle.main.bundleIdentifier else {
+                abort(error: .errVoiceFocus); return
+            }
+        }
         requestMic { [weak self] ok in
             guard let self, self.session == id, self.phase == .starting else { return }
             guard ok else { self.abort(error: .errMicSpeech); return }
+            if settings.dictationMode == .liveWhisperKit {
+                self.beginSession(target: nil)
+                return
+            }
+            if SFSpeechRecognizer.authorizationStatus() == .authorized {
+                self.startAppleSpeechWithDeferredTarget(session: id)
+                return
+            }
             SFSpeechRecognizer.requestAuthorization { status in
                 Task { @MainActor in
                     guard self.session == id, self.phase == .starting else { return }
                     guard status == .authorized else { self.abort(error: .errSpeechDenied); return }
-                    self.acquireTarget(session: id)
+                    self.startAppleSpeechWithDeferredTarget(session: id)
                 }
             }
         }
+    }
+
+    /// Start capture before asking the frontmost app for its accessibility tree.
+    /// Chromium/Electron can take several 80 ms polling rounds to expose the focused
+    /// field; that work must not delay the microphone or the recording indicator.
+    private func startAppleSpeechWithDeferredTarget(session id: UUID) {
+        guard session == id, phase == .starting else { return }
+        beginSession(target: nil)
     }
 
     func stop() {
@@ -299,21 +711,23 @@ final class LiveDictationController {
             if phase == .starting { abort() }
             return
         }
-        // Stop receiving audio/results immediately. Only the already-known tail
-        // is flushed, with the same field/caret checks; manual input cancels it.
+        // Stop capturing new audio immediately; the segment already in flight is
+        // still finalized from what it has, with the same field/caret checks.
         phase = .finishing
-        streamer?.cancel(); streamer = nil
-        recorder.stop()
-        freeze()
+        if settings?.dictationMode == .liveWhisperKit { RecordingOverlay.shared.setProcessing(true) }
         let id = session
-        finishingTask = Task { @MainActor [weak self] in
-            guard let self else { return }
-            await self.typer.flush()
-            guard !Task.isCancelled, self.session == id, self.phase == .finishing else { return }
-            if self.settings?.learnFromCorrections == true, let target = self.target, self.typer.isCurrent() {
-                CorrectionObserver.noteSessionEnded(typed: self.typer.screen, target: target)
-            } else { CorrectionObserver.forget() }
-            self.teardown(); self.phase = .idle
+        let flushed: () -> Void = { [weak self] in
+            Task { @MainActor in
+                guard let self, self.session == id, self.phase == .finishing else { return }
+                self.finishStopping(id: id)
+            }
+        }
+        recorder.stop { [weak self] _ in
+            Task { @MainActor in
+                guard let self, self.session == id, self.phase == .finishing else { return }
+                if self.settings?.dictationMode == .liveWhisperKit { self.whisperStreamer?.flush(flushed) }
+                else { self.streamer?.flush(flushed) }
+            }
         }
     }
 
@@ -321,115 +735,256 @@ final class LiveDictationController {
     /// client asks for it, and the tree needs a moment to appear. Ask once, then
     /// poll briefly instead of failing on the first empty answer.
     private func acquireTarget(session id: UUID, attempt: Int = 0) {
-        guard session == id, phase == .starting else { return }
-        if let target = AXLiveTextTarget(), typer.begin(target: target) { beginSession(target: target); return }
-        guard attempt < 10, AXIsProcessTrusted() else { abort(error: .errLiveField); return }
-        if attempt == 0, let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier {
-            AXLiveTextTarget.requestAccessibilityTree(pid: pid)
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) { [weak self] in
-            self?.acquireTarget(session: id, attempt: attempt + 1)
-        }
-    }
-
-    private func beginSession(target: AXLiveTextTarget) {
-        guard let settings else { abort(); return }
-        self.target = target
-        if settings.learnFromCorrections { CorrectionObserver.checkPreviousSessionCorrection(target: target) }
-        else { CorrectionObserver.forget() }
-        guard let recognizer = SFSpeechRecognizer(locale: settings.liveDictationLanguage.locale), recognizer.isAvailable else {
-            abort(error: .errSpeechUnavailable); return
-        }
-        // Local recognition whenever the system has the model: no network round trip,
-        // partials arrive faster. The server is only a fallback when the setting allows it.
-        let onDevice = recognizer.supportsOnDeviceRecognition
-        if settings.liveOnDeviceOnly, !onDevice { abort(error: .errSpeechOnDevice); return }
-        let streamer = AppleSpeechStreamer(recognizer: recognizer,
-            contextual: DictionaryContext.contextualStrings(personal: PersonalDictionaryStore.shared.entries,
-                         developerEnabled: settings.developerDictionaryEnabled, frequencyEnabled: settings.frequencyLearningEnabled),
-            requiresOnDevice: onDevice)
-        let id = session
-        streamer.onPartial = { [weak self] text, timed, final in
-            guard let self, self.session == id, self.phase == .listening else { return }
-            self.ingest(text, timed: timed, final: final)
-        }
-        streamer.onRestart = { [weak self] in
-            guard let self, self.session == id, self.phase == .listening else { return }
-            self.freeze(); self.transcript.restarted()
-        }
-        self.streamer = streamer; transcript = LiveTranscript(); renderedCommitted = ""
-        typer.onInvalidated = { [weak self] in self?.abort() }
-        inputGuard.start { [weak self] in self?.abort() }
-        appObserver = NSWorkspace.shared.notificationCenter.addObserver(
-            forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main
-        ) { [weak self] _ in
-            Task { @MainActor in self?.abort() }
-        }
-        recorder.onBuffer = { [weak streamer] in streamer?.append(buffer: $0) }
-        recorder.accumulateSamples = false
-        if settings.duckAudio { SystemAudio.duck() }
-        streamer.start()
-        do { try recorder.start() } catch { abort(error: .errDictation); return }
-        phase = .listening; lastPartial = Date()
-        MicLevel.shared.showDot = settings.showRecordingDot
-        RecordingOverlay.shared.show()
-        if settings.voiceSoundEnabled { SystemSounds.play(settings.voiceSoundName, volume: Float(settings.voiceSoundVolume)) }
-        watchdog = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
-            Task { @MainActor in
-                guard let self, self.phase == .listening || self.phase == .finishing else { return }
-                // During our own acknowledged replacement, selection temporarily
-                // differs; LiveTyper performs the ownership check itself.
-                if self.phase == .listening, MicLevel.shared.level > 0.04,
-                   Date().timeIntervalSince(self.lastPartial) > 4 {
-                    self.lastPartial = Date(); self.streamer?.restartNow()
+        guard session == id, phase == .starting || phase == .listening, !targetAcquisitionInFlight,
+              let pid = destinationPID else { return }
+        targetAcquisitionInFlight = true
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let probe = AXLiveTextTarget.probe(expectedPID: pid)
+            if probe == nil, attempt == 0 {
+                AXLiveTextTarget.requestAccessibilityTree(pid: pid)
+            }
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                guard self.session == id else { return }
+                self.targetAcquisitionInFlight = false
+                guard self.phase == .starting || self.phase == .listening else { return }
+                let target = probe.map(AXLiveTextTarget.init(probe:))
+                if let target {
+                    self.attachTarget(target, session: id)
+                    return
+                }
+                guard attempt < 10, AXIsProcessTrusted() else {
+                    NSLog("BabelBar live-dictation: acquireTarget gave up after %d attempts (%@ %@)", attempt,
+                          NSWorkspace.shared.frontmostApplication?.localizedName ?? "?",
+                          NSWorkspace.shared.frontmostApplication?.bundleIdentifier ?? "?")
+                    self.abort(error: .errLiveField); return
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) { [weak self] in
+                    self?.acquireTarget(session: id, attempt: attempt + 1)
                 }
             }
         }
     }
 
-    private func ingest(_ text: String, timed: [LiveSpeechWord], final: Bool) {
-        lastPartial = Date()
-        let rules = self.rules, commands = settings?.voiceCommandsEnabled == true
-        transcript.update(text, timed: timed, correct: {
-            let result = TranscriptCorrector.correct($0, rules: rules)
-            return commands ? VoiceCommands.applyInline(to: result) : result
-        }, correctSpan: {
-            let result = TranscriptCorrector.correct($0, rules: rules)
-            return commands ? VoiceCommands.applyInline(to: result, followsText: true) : result
-        })
-        freezeTimer?.cancel()
-        if final { freeze(); return }
-        // Phrase mode: the field only ever receives text that will not change, so
-        // insertion is append-only. The last words stay unwritten until they settle.
-        if transcript.volatileWordCount >= Self.phraseWords + Self.heldWords { freeze(holding: Self.heldWords) }
-        let id = session
-        let work = DispatchWorkItem { [weak self] in
-            guard let self, self.session == id, self.phase == .listening else { return }
-            self.freeze()
+    /// Bind live text insertion once accessibility is ready. Audio and recognition
+    /// have already started, so any partial received while the target was loading is
+    /// rendered as soon as the verified field is attached.
+    private func attachTarget(_ target: AXLiveTextTarget, session id: UUID) {
+        guard session == id, phase == .starting || phase == .listening, let settings else { return }
+        guard destinationPID == target.pid else {
+            abort(error: .errVoiceFocus)
+            return
         }
-        freezeTimer = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8, execute: work)
+        guard typer.begin(target: target) else {
+            abort(error: .errLiveField)
+            return
+        }
+        self.target = target
+        if let startRequestedAt {
+            NSLog("BabelBar live-dictation: text field ready after %.0f ms",
+                  (ProcessInfo.processInfo.systemUptime - startRequestedAt) * 1000)
+        }
+        if settings.learnFromCorrections {
+            CorrectionObserver.checkPreviousSessionCorrection(target: target)
+        } else {
+            CorrectionObserver.forget()
+        }
+        render()
     }
 
-    private static let phraseWords = 3
-    private static let heldWords = 2
-
-    private func freeze(holding hold: Int? = nil) {
-        freezeTimer?.cancel(); freezeTimer = nil
-        let span = hold.map { transcript.freezeStable(holding: $0) } ?? transcript.freeze()
-        if transcript.committed != renderedCommitted {
-            renderedCommitted = transcript.committed
-            typer.render(target: transcript.committed, frozen: transcript.committed.count)
+    private func beginSession(target: AXLiveTextTarget?) {
+        guard let settings else { abort(); return }
+        if settings.dictationMode == .liveWhisperKit,
+           !WhisperModelManager.isVariantOnDisk(settings.whisperModel.variant) {
+            abort(error: .errWhisperModelMissing); return
         }
-        if settings?.frequencyLearningEnabled == true, !span.isEmpty {
+        self.target = target
+        destinationPID = target?.pid ?? NSWorkspace.shared.frontmostApplication?.processIdentifier
+        if let target {
+            if settings.learnFromCorrections { CorrectionObserver.checkPreviousSessionCorrection(target: target) }
+            else { CorrectionObserver.forget() }
+        } else if settings.dictationMode == .liveWhisperKit {
+            CorrectionObserver.forget()
+        }
+        let id = session
+        let partial: (String) -> Void = { [weak self] text in
+            guard let self, self.session == id, self.phase == .listening else { return }
+            self.lastActivity = Date()
+            if !self.loggedFirstPartial, let startedAt = self.microphoneStartedAt {
+                self.loggedFirstPartial = true
+                NSLog("BabelBar live-dictation: first partial after %.0f ms",
+                      (ProcessInfo.processInfo.systemUptime - startedAt) * 1000)
+            }
+            self.interimText = self.correctedText(text, followsText: !self.committedText.isEmpty)
+            if settings.dictationMode == .liveWhisperKit {
+                self.livePaste?.append(self.whisperCommitter.partial(self.interimText))
+            } else { self.render() }
+        }
+        let finalized: (String) -> Void = { [weak self] text in
+            guard let self, self.session == id, self.phase == .listening || self.phase == .finishing else { return }
+            self.lastActivity = Date()
+            let corrected = self.correctedText(text, followsText: !self.committedText.isEmpty, final: true)
+            if settings.dictationMode == .liveWhisperKit {
+                let result = self.whisperCommitter.finalize(corrected)
+                self.livePaste?.append(result.delta)
+                self.commit(result.segment)
+            } else { self.commit(corrected) }
+        }
+        let failure: () -> Void = { [weak self] in
+            guard let self, self.session == id else { return }
+            self.abort(error: .errDictation)
+        }
+        committedText = ""; interimText = ""; whisperCommitter = WhisperLiveCommitter()
+        if target != nil || settings.dictationMode == .live {
+            typer.onInvalidated = { [weak self] in self?.abort(error: .errLiveInsert) }
+            inputGuard.start { [weak self] in
+                NSLog("BabelBar live-dictation: physical key or click interrupted dictation")
+                self?.abort()
+            }
+        }
+        appObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main
+        ) { [weak self] note in
+            let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
+            Task { @MainActor in
+                guard let self, app?.processIdentifier != self.destinationPID else { return }
+                NSLog("BabelBar live-dictation: app changed (%@ %@)",
+                      app?.localizedName ?? "?", app?.bundleIdentifier ?? "?")
+                self.abort()
+            }
+        }
+        if settings.dictationMode == .liveWhisperKit {
+            let language: Lang? = settings.liveDictationLanguage == .auto ? nil
+                : settings.liveDictationLanguage == .ru ? .ru : .en
+            guard let transcriber = localTranscriber else { abort(error: .errDictation); return }
+            guard let destinationPID else { abort(error: .errVoiceFocus); return }
+            let paste = LivePasteSession(destinationPID: destinationPID)
+            paste.onInvalidated = { [weak self] in self?.abort(error: .errLiveInsert) }
+            livePaste = paste
+            let live = WhisperKitLiveStreamer(transcriber: transcriber, language: language)
+            live.onPartial = partial; live.onSegmentFinal = finalized; live.onFailure = failure
+            whisperStreamer = live
+            recorder.onSamples = { [weak live] in live?.append(samples: $0) }
+            // WhisperKit needs the complete recording buffer for each hypothesis.
+            recorder.accumulateSamples = false
+            live.start()
+        } else {
+            guard let recognizer = SFSpeechRecognizer(locale: settings.liveDictationLanguage.locale), recognizer.isAvailable else {
+                abort(error: .errSpeechUnavailable); return
+            }
+            let onDevice = recognizer.supportsOnDeviceRecognition
+            if settings.liveOnDeviceOnly, !onDevice { abort(error: .errSpeechOnDevice); return }
+            let live = AppleSpeechStreamer(recognizer: recognizer,
+                contextual: DictionaryContext.contextualStrings(personal: PersonalDictionaryStore.shared.entries,
+                             developerEnabled: settings.developerDictionaryEnabled, frequencyEnabled: settings.frequencyLearningEnabled),
+                requiresOnDevice: onDevice)
+            live.onPartial = partial; live.onSegmentFinal = finalized; live.onFailure = failure
+            streamer = live
+            recorder.onBuffer = { [weak live] in live?.append(buffer: $0) }
+            recorder.accumulateSamples = false
+            live.start()
+        }
+        recorder.start { [weak self] result in
+            Task { @MainActor in
+                guard let self, self.session == id, self.phase == .starting else { return }
+                switch result {
+                case .success: self.microphoneDidStart(session: id)
+                case .failure: self.abort(error: .errDictation)
+                }
+            }
+        }
+        if settings.dictationMode == .live { acquireTarget(session: id) }
+    }
+
+    private func microphoneDidStart(session id: UUID) {
+        guard session == id, phase == .starting, let settings else { return }
+        phase = .listening; lastActivity = Date()
+        if let startRequestedAt {
+            NSLog("BabelBar live-dictation: microphone started after %.0f ms",
+                  (ProcessInfo.processInfo.systemUptime - startRequestedAt) * 1000)
+        }
+        microphoneStartedAt = ProcessInfo.processInfo.systemUptime
+        loggedFirstPartial = false
+        if settings.dictationMode == .liveWhisperKit {
+            NSLog("BabelBar live-whisperkit: microphone started for pid %d", destinationPID ?? 0)
+        }
+        MicLevel.shared.showDot = settings.showRecordingDot
+        RecordingOverlay.shared.show()
+        // CoreAudio property calls are synchronous and can stall while the output
+        // device is waking. Start capture and show the recording state first.
+        if settings.duckAudio { SystemAudio.duck() }
+        if settings.voiceSoundEnabled { SystemSounds.play(settings.voiceSoundName, volume: Float(settings.voiceSoundVolume)) }
+        watchdog = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                guard let self, self.phase == .listening else { return }
+                // Mic is active (someone is speaking) but neither a partial nor a
+                // finalized segment has arrived in a long time: the recognizer is
+                // stuck. Drop the in-flight segment and start clean rather than
+                // hang the session forever.
+                if self.settings?.dictationMode != .liveWhisperKit,
+                   MicLevel.shared.level > 0.04, Date().timeIntervalSince(self.lastActivity) > 6 {
+                    self.lastActivity = Date()
+                    self.streamer?.forceRestart()
+                }
+            }
+        }
+    }
+
+    private func correctedText(_ raw: String, followsText: Bool, final: Bool = false) -> String {
+        // WhisperKit sometimes uses repeated dots to mark an unfinished
+        // hypothesis. Treat them as one period; an explicitly spoken
+        // "многоточие" is applied afterwards by VoiceCommands and survives.
+        let cleaned = settings?.dictationMode == .liveWhisperKit
+            ? raw.replacingOccurrences(of: #"\.{2,}|…"#, with: ".", options: .regularExpression)
+            : raw
+        let result = TranscriptCorrector.correct(cleaned, rules: rules)
+        let spoken = settings?.voiceCommandsEnabled == true
+            ? VoiceCommands.applyInline(to: result, followsText: followsText) : result
+        return LiveJoin.spaceAfterPunctuation(spoken, atEnd: final)
+    }
+
+    private func render() {
+        guard target != nil else { return }
+        typer.render(target: LiveJoin.join(committedText, interimText), frozen: committedText.count)
+    }
+
+    /// A segment finalized: fold it into the permanent text. Never touched again.
+    private func commit(_ final: String) {
+        interimText = ""
+        guard !final.isEmpty else { return }
+        committedText = LiveJoin.join(committedText, final)
+        if target != nil { typer.render(target: committedText, frozen: committedText.count) }
+        if target != nil, settings?.frequencyLearningEnabled == true {
             let personal = PersonalDictionaryStore.shared.entries.filter(\.enabled).map(\.written)
-            let id = session, committed = transcript.committed
+            let id = session, committed = committedText
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 await self.typer.flush()
                 guard self.session == id, self.typer.screen.hasPrefix(committed) else { return }
-                FrequencyTracker.recordHits(in: span, personalTerms: personal)
+                FrequencyTracker.recordHits(in: final, personalTerms: personal)
             }
+        }
+    }
+
+    private func finishStopping(id: UUID) {
+        finishingTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            if self.target != nil { await self.typer.flush() }
+            guard !Task.isCancelled, self.session == id, self.phase == .finishing else { return }
+            if self.settings?.dictationMode == .liveWhisperKit {
+                await self.livePaste?.flush()
+                guard !Task.isCancelled, self.session == id, self.phase == .finishing else { return }
+                let text = self.committedText
+                let duration = self.recorder.lastWallDuration
+                let callback = self.reportError
+                self.teardown(); self.phase = .idle
+                if text.isEmpty, duration >= 0.8 { callback?(.errSilence) }
+                return
+            }
+            if self.settings?.learnFromCorrections == true, let target = self.target, self.typer.isCurrent() {
+                CorrectionObserver.noteSessionEnded(typed: self.typer.screen, target: target)
+            } else { CorrectionObserver.forget() }
+            self.teardown(); self.phase = .idle
         }
     }
 
@@ -444,14 +999,17 @@ final class LiveDictationController {
     }
 
     private func teardown() {
-        freezeTimer?.cancel(); freezeTimer = nil
         watchdog?.invalidate(); watchdog = nil
+        targetAcquisitionInFlight = false
         inputGuard.stop()
         if let appObserver { NSWorkspace.shared.notificationCenter.removeObserver(appObserver) }
         appObserver = nil
         streamer?.cancel(); streamer = nil
-        recorder.stop(); recorder.onBuffer = nil; recorder.accumulateSamples = true
+        whisperStreamer?.cancel(); whisperStreamer = nil
+        livePaste?.cancel(); livePaste = nil
+        recorder.cancel(); recorder.onBuffer = nil; recorder.onSamples = nil; recorder.accumulateSamples = true
         typer.cancel(); typer.onInvalidated = nil; target = nil
+        destinationPID = nil; localTranscriber = nil
         SystemAudio.restore(); RecordingOverlay.shared.hide()
         settings = nil; reportError = nil
     }
